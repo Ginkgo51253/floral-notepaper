@@ -207,6 +207,11 @@ export function SettingsPanel({ config, onChange, onChooseNotesDir, onClose }: S
             checked={config.renderHtmlMarkdown}
             onChange={(checked) => setConfigValue("renderHtmlMarkdown", checked)}
           />
+          <ToggleRow
+            label={t("settings.showLineNumbers", { defaultValue: "编辑区显示行号" })}
+            checked={config.showLineNumbers ?? true}
+            onChange={(checked) => setConfigValue("showLineNumbers", checked)}
+          />
         </section>
 
         {/* 快捷键功能设置区域，与上方常规设置分开 */}

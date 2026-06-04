@@ -3,6 +3,7 @@
     "back": "返回",
     "blankNote": "空白筆記",
     "cancel": "取消",
+    "close": "關閉",
     "default": "預設",
     "delete": "刪除",
     "externalFileCount": "{{count}} 個外部檔案",
@@ -73,6 +74,9 @@
       "undoLabel": "還原",
       "redo": "重做（Ctrl+Y）",
       "redoLabel": "重做"
+    },
+    "gotoLine": {
+      "label": "跳轉行"
     },
     "externalFile": {
       "label": "外部檔案 · {{path}}"
@@ -240,6 +244,7 @@
     "tileCtrlClose": "Ctrl+右鍵快速關閉磁貼",
     "tileRenderMarkdown": "磁貼渲染 Markdown",
     "renderHtmlMarkdown": "允許 HTML 標籤渲染",
+    "showLineNumbers": "編輯區顯示行號",
     "title": "應用程式設定",
     "visibilityShortcut": "顯示／隱藏視窗快捷鍵",
     "background": {

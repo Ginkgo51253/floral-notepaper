@@ -318,7 +318,10 @@ export function MainWindow({
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [splitRatio, setSplitRatio] = useState(0.5);
   const [isResizingSplit, setIsResizingSplit] = useState(false);
+  const [gotoLineOpen, setGotoLineOpen] = useState(false);
+  const [gotoLineValue, setGotoLineValue] = useState("");
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const lineNumbersRef = useRef<HTMLDivElement>(null);
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
   const [categoryMenuClosing, setCategoryMenuClosing] = useState(false);
   const [categoryMenuConfirmDelete, setCategoryMenuConfirmDelete] = useState(false);
@@ -458,6 +461,8 @@ export function MainWindow({
     [content],
   );
   const charCount = useMemo(() => countNoteChars(content), [content]);
+  const editorFontSize = settingsConfig?.fontSize ?? 14;
+  const showLineNumbers = settingsConfig?.showLineNumbers ?? true;
 
   const applyNote = useCallback((note: Note) => {
     setSelectedId(note.id);
@@ -785,6 +790,41 @@ export function MainWindow({
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [saveCurrentNote]);
+
+  const handleGotoLineSubmit = useCallback(() => {
+    const parsed = Number.parseInt(gotoLineValue, 10);
+    const textarea = contentRef.current;
+    if (!Number.isNaN(parsed) && textarea) {
+      const lines = content.split("\n");
+      const target = Math.min(Math.max(1, parsed), lines.length);
+      let offset = 0;
+      for (let i = 0; i < target - 1; i += 1) {
+        offset += lines[i].length + 1;
+      }
+      textarea.focus();
+      textarea.setSelectionRange(offset, offset);
+      const lineHeight = editorFontSize * 1.9;
+      textarea.scrollTop = Math.max(0, (target - 1) * lineHeight - textarea.clientHeight / 2);
+      if (lineNumbersRef.current) {
+        lineNumbersRef.current.scrollTop = textarea.scrollTop;
+      }
+    }
+    setGotoLineOpen(false);
+    setGotoLineValue("");
+  }, [content, editorFontSize, gotoLineValue]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && (event.key === "g" || event.key === "G")) {
+        event.preventDefault();
+        if (!selectedId) return;
+        setGotoLineOpen(true);
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [selectedId]);
 
   useEffect(() => {
     if (!selectedId || saveState !== "dirty") return undefined;
@@ -1971,7 +2011,56 @@ export function MainWindow({
             </div>
           )}
 
-          <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex-1 flex flex-col min-w-0 relative">
+            {gotoLineOpen && selectedId && (
+              <div className="absolute top-12 right-4 z-40 flex items-center gap-2 h-9 pl-3 pr-1 rounded-lg bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 shadow-lg animate-menu-enter">
+                <span className="text-[11px] font-body text-ink-faint whitespace-nowrap">
+                  {t("main.gotoLine.label", { defaultValue: "跳转行" })}
+                </span>
+                <span className="w-px h-4 bg-paper-deep/30" />
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoFocus
+                  value={gotoLineValue}
+                  onChange={(event) => setGotoLineValue(event.target.value.replace(/\D/g, ""))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      handleGotoLineSubmit();
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      setGotoLineOpen(false);
+                      setGotoLineValue("");
+                    }
+                  }}
+                  placeholder={String(lineCount)}
+                  className="w-16 text-[12px] font-mono text-ink bg-transparent text-center tabular-nums placeholder:text-ink-ghost/50"
+                />
+                <span className="w-px h-4 bg-paper-deep/30" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGotoLineOpen(false);
+                    setGotoLineValue("");
+                  }}
+                  className="w-6 h-6 flex items-center justify-center rounded text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
+                  title={t("common.close", { defaultValue: "关闭" })}
+                >
+                  <svg
+                    width="11"
+                    height="11"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  >
+                    <path d="M2 2l8 8M10 2l-8 8" />
+                  </svg>
+                </button>
+              </div>
+            )}
             <div className="flex items-center justify-between px-4 h-10 border-b border-paper-deep/20 shrink-0 bg-paper/20">
               <div className="flex items-center gap-1">
                 <button
@@ -2243,7 +2332,22 @@ export function MainWindow({
                         ))}
                       </div>
 
-                      <div className="flex-1 overflow-hidden px-5 pb-4">
+                      <div className="flex-1 overflow-hidden px-5 pb-4 flex">
+                        {showLineNumbers && (
+                          <div
+                            ref={lineNumbersRef}
+                            aria-hidden="true"
+                            data-testid="editor-line-numbers"
+                            className="shrink-0 h-full overflow-hidden text-right pr-3 mr-3 border-r border-paper-deep/30 text-ink-ghost/50 font-mono tabular-nums select-none"
+                            style={{ fontSize: `${editorFontSize}px` }}
+                          >
+                            {Array.from({ length: lineCount }, (_, index) => (
+                              <div key={index} style={{ lineHeight: 1.9 }}>
+                                {index + 1}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <textarea
                           ref={contentRef}
                           data-tab-indent="true"
@@ -2252,12 +2356,17 @@ export function MainWindow({
                             setContent(event.target.value);
                             markDirty();
                           }}
+                          onScroll={(event) => {
+                            if (lineNumbersRef.current) {
+                              lineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
+                            }
+                          }}
                           onPaste={imagePasteHandler}
                           onDrop={imageDropHandler}
                           onDragOver={imageDragOverHandler}
-                          className="w-full h-full leading-[1.9] text-ink-soft font-body placeholder:text-ink-ghost/40"
+                          className="flex-1 h-full leading-[1.9] text-ink-soft font-body placeholder:text-ink-ghost/40"
                           style={{
-                            fontSize: `${settingsConfig?.fontSize ?? 14}px`,
+                            fontSize: `${editorFontSize}px`,
                             tabSize: `var(--tab-indent-size, 2)`,
                           }}
                           placeholder={t("main.editor.contentPlaceholder", {

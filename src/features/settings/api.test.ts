@@ -49,6 +49,7 @@ describe("settings api", () => {
       toggleVisibilityShortcut: "",
       tileRenderMarkdown: false,
       renderHtmlMarkdown: false,
+      showLineNumbers: true,
       openAtCursor: true,
     };
     mockedInvoke.mockResolvedValue(config);
@@ -80,6 +81,7 @@ describe("settings api", () => {
       toggleVisibilityShortcut: "",
       tileRenderMarkdown: false,
       renderHtmlMarkdown: false,
+      showLineNumbers: true,
       openAtCursor: true,
     };
     mockedInvoke.mockResolvedValue(config);

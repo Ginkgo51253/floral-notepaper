@@ -70,6 +70,8 @@ pub struct AppConfig {
     pub tile_render_markdown: bool,
     #[serde(default)]
     pub render_html_markdown: bool,
+    #[serde(default = "default_show_line_numbers")]
+    pub show_line_numbers: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -764,6 +766,7 @@ impl NoteStore {
             tile_ctrl_close: default_tile_ctrl_close(),
             tile_render_markdown: false,
             render_html_markdown: false,
+            show_line_numbers: default_show_line_numbers(),
             surface_width: None,
             surface_height: None,
             toggle_visibility_shortcut: default_toggle_visibility_shortcut(),
@@ -1128,6 +1131,10 @@ fn default_open_at_cursor() -> bool {
     true
 }
 
+fn default_show_line_numbers() -> bool {
+    true
+}
+
 fn default_locale() -> String {
     "zh-CN".into()
 }
@@ -1277,6 +1284,7 @@ mod tests {
             tile_ctrl_close: true,
             tile_render_markdown: false,
             render_html_markdown: false,
+            show_line_numbers: true,
             surface_width: None,
             surface_height: None,
             toggle_visibility_shortcut: String::new(),
