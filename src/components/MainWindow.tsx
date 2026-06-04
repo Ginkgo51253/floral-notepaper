@@ -47,6 +47,8 @@ import {
   metadataFromNote,
 } from "../features/notes/noteUtils";
 import type { CategoryGroup } from "../features/notes/noteUtils";
+import { findAll, buildHighlightHTML } from "../features/editor/findReplace";
+import type { Range } from "../features/editor/findReplace";
 import {
   getNoteContextMenuItems,
   type NoteContextMenuAction,
@@ -320,6 +322,13 @@ export function MainWindow({
   const [isResizingSplit, setIsResizingSplit] = useState(false);
   const [gotoLineOpen, setGotoLineOpen] = useState(false);
   const [gotoLineValue, setGotoLineValue] = useState("");
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findSearched, setFindSearched] = useState(false);
+  const [findMatches, setFindMatches] = useState<Range[]>([]);
+  const [findCurrentIndex, setFindCurrentIndex] = useState(0);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
@@ -813,11 +822,166 @@ export function MainWindow({
     setGotoLineValue("");
   }, [content, editorFontSize, gotoLineValue]);
 
+  const scrollToMatch = useCallback(
+    (textarea: HTMLTextAreaElement, matchStart: number) => {
+      const lineHeight = editorFontSize * 1.9;
+      const beforeText = textarea.value.substring(0, matchStart);
+      const lineNum = beforeText.split("\n").length;
+      textarea.scrollTop = Math.max(0, (lineNum - 1) * lineHeight - textarea.clientHeight / 2);
+      if (lineNumbersRef.current) {
+        lineNumbersRef.current.scrollTop = textarea.scrollTop;
+      }
+    },
+    [editorFontSize],
+  );
+
+  const handleFindChange = useCallback((value: string) => {
+    setFindQuery(value);
+    setFindSearched(false);
+  }, []);
+
+  const handleFindExecute = useCallback(
+    (direction: "next" | "prev") => {
+      const query = findQuery;
+      if (!query) {
+        setFindMatches([]);
+        setFindCurrentIndex(-1);
+        return;
+      }
+      const newMatches = findAll(content, query);
+      setFindMatches(newMatches);
+      setFindSearched(true);
+
+      if (newMatches.length === 0) {
+        setFindCurrentIndex(-1);
+        return;
+      }
+
+      const textarea = contentRef.current;
+      const cursorPos = textarea?.selectionStart ?? 0;
+
+      let idx: number;
+      if (direction === "next") {
+        // 从光标位置向后找第一个匹配
+        idx = newMatches.findIndex((m) => m.start >= cursorPos);
+        if (idx === -1) idx = 0; // 无后面的，折回到第一个
+      } else {
+        // 从光标位置向前找第一个匹配
+        idx = -1;
+        for (let i = newMatches.length - 1; i >= 0; i--) {
+          if (newMatches[i].end <= cursorPos) {
+            idx = i;
+            break;
+          }
+        }
+        if (idx === -1) idx = newMatches.length - 1; // 无前面的，折回到最后一个
+      }
+      setFindCurrentIndex(idx);
+
+      if (textarea) {
+        const match = newMatches[idx];
+        textarea.focus();
+        textarea.setSelectionRange(match.start, match.end);
+        scrollToMatch(textarea, match.start);
+      }
+    },
+    [content, findQuery, scrollToMatch],
+  );
+
+  const handleFindPrev = useCallback(() => {
+    if (!findSearched) {
+      handleFindExecute("prev");
+      return;
+    }
+    const total = findMatches.length;
+    if (total === 0) return;
+    const idx = ((findCurrentIndex >= 0 ? findCurrentIndex : 0) - 1 + total) % total;
+    setFindCurrentIndex(idx);
+    const textarea = contentRef.current;
+    if (textarea) {
+      const match = findMatches[idx];
+      textarea.focus();
+      textarea.setSelectionRange(match.start, match.end);
+      scrollToMatch(textarea, match.start);
+    }
+  }, [findMatches, findCurrentIndex, scrollToMatch, findSearched, handleFindExecute]);
+
+  const handleFindNext = useCallback(() => {
+    if (!findSearched) {
+      handleFindExecute("next");
+      return;
+    }
+    const total = findMatches.length;
+    if (total === 0) return;
+    const idx = ((findCurrentIndex >= 0 ? findCurrentIndex : -1) + 1) % total;
+    setFindCurrentIndex(idx);
+    const textarea = contentRef.current;
+    if (textarea) {
+      const match = findMatches[idx];
+      textarea.focus();
+      textarea.setSelectionRange(match.start, match.end);
+      scrollToMatch(textarea, match.start);
+    }
+  }, [findMatches, findCurrentIndex, scrollToMatch, findSearched, handleFindExecute]);
+
+  const handleFindClose = useCallback(() => {
+    setFindOpen(false);
+    setFindSearched(false);
+    contentRef.current?.focus();
+  }, []);
+
+  // 高亮渲染：当查找面板打开且有搜索结果时，在 textarea 底层渲染黄色高亮
+  useEffect(() => {
+    if (!highlightRef.current) return;
+    if (findOpen && findSearched) {
+      highlightRef.current.innerHTML = buildHighlightHTML(content, findMatches, findCurrentIndex);
+      // 同步高亮层滚动位置
+      if (contentRef.current) {
+        highlightRef.current.scrollTop = contentRef.current.scrollTop;
+      }
+    } else {
+      highlightRef.current.innerHTML = "";
+    }
+  }, [findOpen, findSearched, findMatches, findCurrentIndex, content]);
+
+  // 切换笔记时自动重新执行查找
+  const prevFindNoteId = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (prevFindNoteId.current === selectedId) return;
+    prevFindNoteId.current = selectedId;
+    if (!findOpen || !findQuery || !selectedId) return;
+
+    const newMatches = findAll(content, findQuery);
+    setFindMatches(newMatches);
+    setFindSearched(true);
+    if (newMatches.length > 0) {
+      setFindCurrentIndex(0);
+      const textarea = contentRef.current;
+      if (textarea) {
+        textarea.setSelectionRange(newMatches[0].start, newMatches[0].end);
+        scrollToMatch(textarea, newMatches[0].start);
+      }
+    } else {
+      setFindCurrentIndex(-1);
+    }
+  }, [selectedId, findOpen, findQuery, content, scrollToMatch]);
+
+  // 切换到 preview 模式时关闭查找面板
+  useEffect(() => {
+    if (viewMode === "preview" && findOpen) {
+      setFindOpen(false);
+      setFindSearched(false);
+      if (highlightRef.current) highlightRef.current.innerHTML = "";
+    }
+  }, [viewMode, findOpen]);
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.ctrlKey || event.metaKey) && (event.key === "g" || event.key === "G")) {
         event.preventDefault();
         if (!selectedId) return;
+        setFindOpen(false);
         setGotoLineOpen(true);
       }
     }
@@ -825,6 +989,54 @@ export function MainWindow({
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [selectedId]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && (event.key === "f" || event.key === "F")) {
+        event.preventDefault();
+        if (!selectedId) return;
+        if (viewMode === "preview") return;
+        if (findOpen) {
+          findInputRef.current?.focus();
+          findInputRef.current?.select();
+        } else {
+          setGotoLineOpen(false);
+          const textarea = contentRef.current;
+          // 有框选文本时自动填入并搜索
+          if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
+            const selected = content.substring(textarea.selectionStart, textarea.selectionEnd);
+            if (selected) {
+              setFindQuery(selected);
+              setFindOpen(true);
+              const newMatches = findAll(content, selected);
+              setFindMatches(newMatches);
+              setFindSearched(true);
+              if (newMatches.length > 0) {
+                const cursorPos = textarea.selectionStart;
+                let idx = newMatches.findIndex((m) => m.start >= cursorPos);
+                if (idx === -1) idx = 0;
+                setFindCurrentIndex(idx);
+                const match = newMatches[idx];
+                requestAnimationFrame(() => {
+                  textarea.focus();
+                  textarea.setSelectionRange(match.start, match.end);
+                  scrollToMatch(textarea, match.start);
+                });
+              } else {
+                setFindCurrentIndex(-1);
+              }
+              return;
+            }
+          }
+          // 无框选时仅打开面板
+          setFindOpen(true);
+        }
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [selectedId, viewMode, findOpen, content, scrollToMatch]);
 
   useEffect(() => {
     if (!selectedId || saveState !== "dirty") return undefined;
@@ -2061,6 +2273,101 @@ export function MainWindow({
                 </button>
               </div>
             )}
+            {findOpen && selectedId && (
+              <div className="absolute top-12 right-4 z-40 flex items-center gap-2 h-9 pl-3 pr-1 rounded-lg bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 shadow-lg animate-menu-enter">
+                <span className="text-[11px] font-body text-ink-faint whitespace-nowrap">
+                  {t("main.find.label", { defaultValue: "查找" })}
+                </span>
+                <span className="w-px h-4 bg-paper-deep/30" />
+                <input
+                  ref={findInputRef}
+                  type="text"
+                  autoFocus
+                  value={findQuery}
+                  onChange={(event) => handleFindChange(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      if (event.shiftKey) {
+                        handleFindPrev();
+                      } else {
+                        handleFindNext();
+                      }
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      handleFindClose();
+                    }
+                  }}
+                  placeholder=""
+                  className="w-28 text-[12px] font-mono text-ink bg-transparent tabular-nums placeholder:text-ink-ghost/50"
+                />
+                <span className="w-px h-4 bg-paper-deep/30" />
+                <span className="text-[11px] font-mono text-ink-ghost tabular-nums min-w-[28px] text-center">
+                  {!findSearched
+                    ? "—"
+                    : findMatches.length > 0
+                      ? `${findCurrentIndex + 1}/${findMatches.length}`
+                      : "0/0"}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleFindPrev}
+                  disabled={findMatches.length === 0}
+                  className="w-6 h-6 flex items-center justify-center rounded text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default"
+                  title={t("main.find.prev", { defaultValue: "上一个匹配" })}
+                >
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  >
+                    <path d="M6 10V2M6 2L2 6M6 2l4 4" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleFindNext}
+                  disabled={findMatches.length === 0}
+                  className="w-6 h-6 flex items-center justify-center rounded text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default"
+                  title={t("main.find.next", { defaultValue: "下一个匹配" })}
+                >
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  >
+                    <path d="M6 2v8M6 10l4-4M6 10l-4-4" />
+                  </svg>
+                </button>
+                <span className="w-px h-4 bg-paper-deep/30" />
+                <button
+                  type="button"
+                  onClick={handleFindClose}
+                  className="w-6 h-6 flex items-center justify-center rounded text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
+                  title={t("common.close", { defaultValue: "关闭" })}
+                >
+                  <svg
+                    width="11"
+                    height="11"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  >
+                    <path d="M2 2l8 8M10 2l-8 8" />
+                  </svg>
+                </button>
+              </div>
+            )}
             <div className="flex items-center justify-between px-4 h-10 border-b border-paper-deep/20 shrink-0 bg-paper/20">
               <div className="flex items-center gap-1">
                 <button
@@ -2348,33 +2655,50 @@ export function MainWindow({
                             ))}
                           </div>
                         )}
-                        <textarea
-                          ref={contentRef}
-                          data-tab-indent="true"
-                          value={content}
-                          onChange={(event) => {
-                            setContent(event.target.value);
-                            markDirty();
-                          }}
-                          onScroll={(event) => {
-                            if (lineNumbersRef.current) {
-                              lineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
-                            }
-                          }}
-                          onPaste={imagePasteHandler}
-                          onDrop={imageDropHandler}
-                          onDragOver={imageDragOverHandler}
-                          className="flex-1 h-full leading-[1.9] text-ink-soft font-body placeholder:text-ink-ghost/40"
-                          style={{
-                            fontSize: `${editorFontSize}px`,
-                            tabSize: `var(--tab-indent-size, 2)`,
-                          }}
-                          placeholder={t("main.editor.contentPlaceholder", {
-                            defaultValue: "开始写作……",
-                          })}
-                          spellCheck={false}
-                          disabled={!selectedId}
-                        />
+                        <div className="flex-1 relative min-w-0 self-stretch">
+                          <div
+                            ref={highlightRef}
+                            className="find-highlight-layer absolute inset-0 leading-[1.9] font-body"
+                            style={{
+                              fontSize: `${editorFontSize}px`,
+                            }}
+                          />
+                          <textarea
+                            ref={contentRef}
+                            data-tab-indent="true"
+                            value={content}
+                            onChange={(event) => {
+                              setContent(event.target.value);
+                              markDirty();
+                              if (findOpen) {
+                                setFindOpen(false);
+                                setFindSearched(false);
+                                if (highlightRef.current) highlightRef.current.innerHTML = "";
+                              }
+                            }}
+                            onScroll={(event) => {
+                              if (lineNumbersRef.current) {
+                                lineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
+                              }
+                              if (highlightRef.current) {
+                                highlightRef.current.scrollTop = event.currentTarget.scrollTop;
+                              }
+                            }}
+                            onPaste={imagePasteHandler}
+                            onDrop={imageDropHandler}
+                            onDragOver={imageDragOverHandler}
+                            className="relative w-full h-full leading-[1.9] text-ink-soft font-body placeholder:text-ink-ghost/40 bg-transparent"
+                            style={{
+                              fontSize: `${editorFontSize}px`,
+                              tabSize: `var(--tab-indent-size, 2)`,
+                            }}
+                            placeholder={t("main.editor.contentPlaceholder", {
+                              defaultValue: "开始写作……",
+                            })}
+                            spellCheck={false}
+                            disabled={!selectedId}
+                          />
+                        </div>
                       </div>
                     </div>
                   )}

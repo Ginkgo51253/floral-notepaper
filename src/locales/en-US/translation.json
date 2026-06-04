@@ -78,6 +78,11 @@
     "gotoLine": {
       "label": "Go to line"
     },
+    "find": {
+      "label": "Find",
+      "prev": "Previous match",
+      "next": "Next match"
+    },
     "externalFile": {
       "label": "External File · {{path}}"
     },

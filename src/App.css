@@ -282,6 +282,26 @@ input::placeholder {
     transform: scale(1);
   }
 }
+
+/* Find-in-page highlight layer */
+.find-highlight-layer {
+  color: transparent;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow: hidden;
+  pointer-events: none;
+}
+.find-highlight-layer mark.fh-match {
+  background: rgba(255, 230, 0, 0.45);
+  color: transparent;
+  border-radius: 1px;
+}
+.find-highlight-layer mark.fh-current {
+  background: rgba(255, 200, 0, 0.7);
+  color: transparent;
+  border-radius: 1px;
+}
+
 @keyframes shimmer {
   0%,
   100% {
