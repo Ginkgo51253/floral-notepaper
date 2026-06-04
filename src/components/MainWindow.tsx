@@ -47,7 +47,12 @@ import {
   metadataFromNote,
 } from "../features/notes/noteUtils";
 import type { CategoryGroup } from "../features/notes/noteUtils";
-import { findAll, buildHighlightHTML } from "../features/editor/findReplace";
+import {
+  findAll,
+  buildHighlightHTML,
+  replaceCurrent,
+  replaceAll,
+} from "../features/editor/findReplace";
 import type { Range } from "../features/editor/findReplace";
 import {
   getNoteContextMenuItems,
@@ -329,6 +334,21 @@ export function MainWindow({
   const [findCurrentIndex, setFindCurrentIndex] = useState(0);
   const findInputRef = useRef<HTMLInputElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
+  const [replaceOpen, setReplaceOpen] = useState(false);
+  const [replaceQuery, setReplaceQuery] = useState("");
+  const [replaceSearched, setReplaceSearched] = useState(false);
+  const [replaceMatches, setReplaceMatches] = useState<Range[]>([]);
+  const [replaceCurrentIndex, setReplaceCurrentIndex] = useState(0);
+  const [replaceValue, setReplaceValue] = useState("");
+  const [replaceCaseSensitive, setReplaceCaseSensitive] = useState(false);
+  const [replaceUseRegex, setReplaceUseRegex] = useState(false);
+  const [replaceWholeWord, setReplaceWholeWord] = useState(false);
+  const [replacePreserveCase, setReplacePreserveCase] = useState(false);
+  const [replaceScope, setReplaceScope] = useState<"current" | "all">("current");
+  const [replaceAllCount, setReplaceAllCount] = useState<number | null>(null);
+  const replaceAllPrevContentRef = useRef<string | null>(null);
+  const replaceFindInputRef = useRef<HTMLInputElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
@@ -794,11 +814,36 @@ export function MainWindow({
         event.preventDefault();
         void saveCurrentNote();
       }
+      // 全部替换后的 Ctrl+Z 撤销
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        event.key === "z" &&
+        replaceAllPrevContentRef.current
+      ) {
+        const textarea = contentRef.current;
+        if (textarea && textarea.value === content) {
+          event.preventDefault();
+          const prev = replaceAllPrevContentRef.current;
+          replaceAllPrevContentRef.current = null;
+          textarea.focus();
+          textarea.select();
+          document.execCommand("insertText", false, prev);
+          setContent(prev);
+          setReplaceAllCount(null);
+          // 重算匹配
+          const newMatches = findAll(prev, replaceQuery, replaceCaseSensitive, replaceUseRegex);
+          setReplaceMatches(newMatches);
+          setReplaceSearched(true);
+          if (newMatches.length > 0) {
+            setReplaceCurrentIndex(0);
+          }
+        }
+      }
     }
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [saveCurrentNote]);
+  }, [saveCurrentNote, content, replaceQuery, replaceCaseSensitive, replaceUseRegex]);
 
   const handleGotoLineSubmit = useCallback(() => {
     const parsed = Number.parseInt(gotoLineValue, 10);
@@ -880,7 +925,6 @@ export function MainWindow({
 
       if (textarea) {
         const match = newMatches[idx];
-        textarea.focus();
         textarea.setSelectionRange(match.start, match.end);
         scrollToMatch(textarea, match.start);
       }
@@ -900,7 +944,6 @@ export function MainWindow({
     const textarea = contentRef.current;
     if (textarea) {
       const match = findMatches[idx];
-      textarea.focus();
       textarea.setSelectionRange(match.start, match.end);
       scrollToMatch(textarea, match.start);
     }
@@ -918,7 +961,6 @@ export function MainWindow({
     const textarea = contentRef.current;
     if (textarea) {
       const match = findMatches[idx];
-      textarea.focus();
       textarea.setSelectionRange(match.start, match.end);
       scrollToMatch(textarea, match.start);
     }
@@ -930,28 +972,283 @@ export function MainWindow({
     contentRef.current?.focus();
   }, []);
 
-  // 高亮渲染：当查找面板打开且有搜索结果时，在 textarea 底层渲染黄色高亮
+  const handleReplaceFindChange = useCallback((value: string) => {
+    setReplaceQuery(value);
+    setReplaceSearched(false);
+  }, []);
+
+  const handleReplaceFindExecute = useCallback(
+    (direction: "next" | "prev") => {
+      const query = replaceQuery;
+      if (!query) {
+        setReplaceMatches([]);
+        setReplaceCurrentIndex(-1);
+        return;
+      }
+      const newMatches = findAll(
+        content,
+        query,
+        replaceCaseSensitive,
+        replaceUseRegex,
+        replaceWholeWord,
+      );
+      setReplaceMatches(newMatches);
+      setReplaceSearched(true);
+
+      if (newMatches.length === 0) {
+        setReplaceCurrentIndex(-1);
+        return;
+      }
+
+      const textarea = contentRef.current;
+      const cursorPos = textarea?.selectionStart ?? 0;
+
+      let idx: number;
+      if (direction === "next") {
+        idx = newMatches.findIndex((m) => m.start >= cursorPos);
+        if (idx === -1) idx = 0;
+      } else {
+        idx = -1;
+        for (let i = newMatches.length - 1; i >= 0; i--) {
+          if (newMatches[i].end <= cursorPos) {
+            idx = i;
+            break;
+          }
+        }
+        if (idx === -1) idx = newMatches.length - 1;
+      }
+      setReplaceCurrentIndex(idx);
+
+      if (textarea) {
+        const match = newMatches[idx];
+        textarea.setSelectionRange(match.start, match.end);
+        scrollToMatch(textarea, match.start);
+      }
+    },
+    [content, replaceQuery, replaceCaseSensitive, replaceUseRegex, replaceWholeWord, scrollToMatch],
+  );
+
+  const handleReplaceFindPrev = useCallback(() => {
+    if (!replaceSearched) {
+      handleReplaceFindExecute("prev");
+      return;
+    }
+    const total = replaceMatches.length;
+    if (total === 0) return;
+    const idx = ((replaceCurrentIndex >= 0 ? replaceCurrentIndex : 0) - 1 + total) % total;
+    setReplaceCurrentIndex(idx);
+    const textarea = contentRef.current;
+    if (textarea) {
+      const match = replaceMatches[idx];
+      textarea.setSelectionRange(match.start, match.end);
+      scrollToMatch(textarea, match.start);
+    }
+  }, [
+    replaceMatches,
+    replaceCurrentIndex,
+    scrollToMatch,
+    replaceSearched,
+    handleReplaceFindExecute,
+  ]);
+
+  const handleReplaceFindNext = useCallback(() => {
+    if (!replaceSearched) {
+      handleReplaceFindExecute("next");
+      return;
+    }
+    const total = replaceMatches.length;
+    if (total === 0) return;
+    const idx = ((replaceCurrentIndex >= 0 ? replaceCurrentIndex : -1) + 1) % total;
+    setReplaceCurrentIndex(idx);
+    const textarea = contentRef.current;
+    if (textarea) {
+      const match = replaceMatches[idx];
+      textarea.setSelectionRange(match.start, match.end);
+      scrollToMatch(textarea, match.start);
+    }
+  }, [
+    replaceMatches,
+    replaceCurrentIndex,
+    scrollToMatch,
+    replaceSearched,
+    handleReplaceFindExecute,
+  ]);
+
+  const handleReplaceClose = useCallback(() => {
+    setReplaceOpen(false);
+    setReplaceSearched(false);
+    if (highlightRef.current) highlightRef.current.innerHTML = "";
+    contentRef.current?.focus();
+  }, []);
+
+  const handleReplaceCurrent = useCallback(() => {
+    if (!replaceQuery || replaceCurrentIndex < 0 || replaceMatches.length === 0) return;
+    const { content: newContent } = replaceCurrent(
+      content,
+      replaceQuery,
+      replaceValue,
+      replaceCurrentIndex,
+      replaceCaseSensitive,
+      replaceUseRegex,
+      replaceWholeWord,
+      replacePreserveCase,
+    );
+    setContent(newContent);
+    markDirty();
+    const newMatches = findAll(
+      newContent,
+      replaceQuery,
+      replaceCaseSensitive,
+      replaceUseRegex,
+      replaceWholeWord,
+    );
+    setReplaceMatches(newMatches);
+    setReplaceSearched(true);
+    if (newMatches.length > 0) {
+      const idx = Math.min(replaceCurrentIndex, newMatches.length - 1);
+      setReplaceCurrentIndex(idx);
+      const textarea = contentRef.current;
+      if (textarea) {
+        textarea.focus();
+        const match = newMatches[idx];
+        textarea.setSelectionRange(match.start, match.end);
+        scrollToMatch(textarea, match.start);
+      }
+    } else {
+      setReplaceCurrentIndex(-1);
+    }
+  }, [
+    content,
+    replaceQuery,
+    replaceCurrentIndex,
+    replaceMatches.length,
+    replaceValue,
+    replaceCaseSensitive,
+    replaceUseRegex,
+    replaceWholeWord,
+    replacePreserveCase,
+    scrollToMatch,
+  ]);
+
+  const handleReplaceAll = useCallback(() => {
+    if (!replaceQuery) return;
+
+    // "所有笔记"模式弹窗确认
+    if (replaceScope === "all") {
+      const confirmed = window.confirm(
+        t("main.replace.confirmAll", {
+          count: notes.length,
+          defaultValue: "确定要在所有笔记中执行替换？（共 {{count}} 篇，此操作不可撤销）",
+        }),
+      );
+      if (!confirmed) return;
+      // 异步遍历所有笔记执行替换
+      void (async () => {
+        let totalReplaced = 0;
+        const noteMetas = await listNotes();
+        for (const meta of noteMetas) {
+          try {
+            const note = await getNote(meta.id);
+            const { content: newContent, replacedCount } = replaceAll(
+              note.content,
+              replaceQuery,
+              replaceValue,
+              replaceCaseSensitive,
+              replaceUseRegex,
+              replaceWholeWord,
+              replacePreserveCase,
+            );
+            if (replacedCount > 0) {
+              await updateNote(meta.id, {
+                title: note.title,
+                content: newContent,
+                category: note.category,
+              });
+              totalReplaced += replacedCount;
+            }
+          } catch {
+            // skip notes that fail
+          }
+        }
+        if (totalReplaced > 0) {
+          await emit("notes-changed");
+        }
+        setReplaceAllCount(totalReplaced);
+      })();
+      return;
+    }
+
+    // 保存快照用于 Ctrl+Z 撤销
+    replaceAllPrevContentRef.current = content;
+
+    const { content: newContent, replacedCount } = replaceAll(
+      content,
+      replaceQuery,
+      replaceValue,
+      replaceCaseSensitive,
+      replaceUseRegex,
+      replaceWholeWord,
+      replacePreserveCase,
+    );
+    if (replacedCount === 0) return;
+    setContent(newContent);
+    markDirty();
+    setReplaceMatches([]);
+    setReplaceCurrentIndex(-1);
+    setReplaceSearched(false);
+    setReplaceAllCount(replacedCount);
+  }, [
+    content,
+    replaceQuery,
+    replaceValue,
+    replaceCaseSensitive,
+    replaceUseRegex,
+    replaceWholeWord,
+    replacePreserveCase,
+    replaceScope,
+    notes.length,
+    t,
+  ]);
+
+  // 高亮渲染：查找面板或替换面板有搜索结果时渲染黄色高亮
   useEffect(() => {
     if (!highlightRef.current) return;
-    if (findOpen && findSearched) {
+    const isFindActive = findOpen && findSearched;
+    const isReplaceActive = replaceOpen && replaceSearched;
+    if (isFindActive) {
       highlightRef.current.innerHTML = buildHighlightHTML(content, findMatches, findCurrentIndex);
-      // 同步高亮层滚动位置
-      if (contentRef.current) {
-        highlightRef.current.scrollTop = contentRef.current.scrollTop;
-      }
+    } else if (isReplaceActive) {
+      highlightRef.current.innerHTML = buildHighlightHTML(
+        content,
+        replaceMatches,
+        replaceCurrentIndex,
+      );
     } else {
       highlightRef.current.innerHTML = "";
     }
-  }, [findOpen, findSearched, findMatches, findCurrentIndex, content]);
+    if ((isFindActive || isReplaceActive) && contentRef.current) {
+      highlightRef.current.scrollTop = contentRef.current.scrollTop;
+    }
+  }, [
+    findOpen,
+    findSearched,
+    findMatches,
+    findCurrentIndex,
+    replaceOpen,
+    replaceSearched,
+    replaceMatches,
+    replaceCurrentIndex,
+    content,
+  ]);
 
-  // 切换笔记时自动重新执行查找
+  // 切换笔记时自动重新执行查找（两个面板独立处理）
   const prevFindNoteId = useRef<string | null>(null);
+  const prevReplaceNoteId = useRef<string | null>(null);
 
   useEffect(() => {
     if (prevFindNoteId.current === selectedId) return;
     prevFindNoteId.current = selectedId;
     if (!findOpen || !findQuery || !selectedId) return;
-
     const newMatches = findAll(content, findQuery);
     setFindMatches(newMatches);
     setFindSearched(true);
@@ -967,14 +1264,55 @@ export function MainWindow({
     }
   }, [selectedId, findOpen, findQuery, content, scrollToMatch]);
 
-  // 切换到 preview 模式时关闭查找面板
   useEffect(() => {
-    if (viewMode === "preview" && findOpen) {
-      setFindOpen(false);
-      setFindSearched(false);
-      if (highlightRef.current) highlightRef.current.innerHTML = "";
+    if (prevReplaceNoteId.current === selectedId) return;
+    prevReplaceNoteId.current = selectedId;
+    if (!replaceOpen || !replaceQuery || !selectedId) return;
+    const newMatches = findAll(
+      content,
+      replaceQuery,
+      replaceCaseSensitive,
+      replaceUseRegex,
+      replaceWholeWord,
+    );
+    setReplaceMatches(newMatches);
+    setReplaceSearched(true);
+    if (newMatches.length > 0) {
+      setReplaceCurrentIndex(0);
+      const textarea = contentRef.current;
+      if (textarea) {
+        textarea.setSelectionRange(newMatches[0].start, newMatches[0].end);
+        scrollToMatch(textarea, newMatches[0].start);
+      }
+    } else {
+      setReplaceCurrentIndex(-1);
     }
-  }, [viewMode, findOpen]);
+  }, [
+    selectedId,
+    replaceOpen,
+    replaceQuery,
+    replaceCaseSensitive,
+    replaceUseRegex,
+    replaceWholeWord,
+    content,
+    scrollToMatch,
+  ]);
+
+  // 切换到 preview 模式时关闭所有面板
+  useEffect(() => {
+    if (viewMode === "preview") {
+      if (findOpen) {
+        setFindOpen(false);
+        setFindSearched(false);
+        if (highlightRef.current) highlightRef.current.innerHTML = "";
+      }
+      if (replaceOpen) {
+        setReplaceOpen(false);
+        setReplaceSearched(false);
+        if (highlightRef.current) highlightRef.current.innerHTML = "";
+      }
+    }
+  }, [viewMode, findOpen, replaceOpen]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -982,6 +1320,7 @@ export function MainWindow({
         event.preventDefault();
         if (!selectedId) return;
         setFindOpen(false);
+        setReplaceOpen(false);
         setGotoLineOpen(true);
       }
     }
@@ -997,10 +1336,34 @@ export function MainWindow({
         if (!selectedId) return;
         if (viewMode === "preview") return;
         if (findOpen) {
+          // 有框选文本时更新查找
+          const textarea = contentRef.current;
+          if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
+            const selected = content.substring(textarea.selectionStart, textarea.selectionEnd);
+            if (selected) {
+              setFindQuery(selected);
+              const newMatches = findAll(content, selected);
+              setFindMatches(newMatches);
+              setFindSearched(true);
+              if (newMatches.length > 0) {
+                const cursorPos = textarea.selectionStart;
+                let idx = newMatches.findIndex((m) => m.start >= cursorPos);
+                if (idx === -1) idx = 0;
+                setFindCurrentIndex(idx);
+                const match = newMatches[idx];
+                textarea.setSelectionRange(match.start, match.end);
+                scrollToMatch(textarea, match.start);
+              } else {
+                setFindCurrentIndex(-1);
+              }
+              return;
+            }
+          }
           findInputRef.current?.focus();
           findInputRef.current?.select();
         } else {
           setGotoLineOpen(false);
+          setReplaceOpen(false);
           const textarea = contentRef.current;
           // 有框选文本时自动填入并搜索
           if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
@@ -1037,6 +1400,98 @@ export function MainWindow({
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [selectedId, viewMode, findOpen, content, scrollToMatch]);
+
+  // Ctrl+H — 替换面板
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && (event.key === "h" || event.key === "H")) {
+        event.preventDefault();
+        if (!selectedId) return;
+        if (viewMode === "preview") return;
+        if (replaceOpen) {
+          // 有框选文本时更新查找
+          const textarea = contentRef.current;
+          if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
+            const selected = content.substring(textarea.selectionStart, textarea.selectionEnd);
+            if (selected) {
+              setReplaceQuery(selected);
+              const newMatches = findAll(
+                content,
+                selected,
+                replaceCaseSensitive,
+                replaceUseRegex,
+                replaceWholeWord,
+              );
+              setReplaceMatches(newMatches);
+              setReplaceSearched(true);
+              if (newMatches.length > 0) {
+                const cursorPos = textarea.selectionStart;
+                let idx = newMatches.findIndex((m) => m.start >= cursorPos);
+                if (idx === -1) idx = 0;
+                setReplaceCurrentIndex(idx);
+                const match = newMatches[idx];
+                textarea.setSelectionRange(match.start, match.end);
+                scrollToMatch(textarea, match.start);
+              } else {
+                setReplaceCurrentIndex(-1);
+              }
+              return;
+            }
+          }
+          replaceFindInputRef.current?.focus();
+          replaceFindInputRef.current?.select();
+        } else {
+          setGotoLineOpen(false);
+          setFindOpen(false);
+          setReplaceOpen(true);
+          // 有框选文本时自动填入查找框并搜索
+          const textarea = contentRef.current;
+          if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
+            const selected = content.substring(textarea.selectionStart, textarea.selectionEnd);
+            if (selected) {
+              setReplaceQuery(selected);
+              // 自动搜索
+              const newMatches = findAll(
+                content,
+                selected,
+                replaceCaseSensitive,
+                replaceUseRegex,
+                replaceWholeWord,
+              );
+              setReplaceMatches(newMatches);
+              setReplaceSearched(true);
+              if (newMatches.length > 0) {
+                const cursorPos = textarea.selectionStart;
+                let idx = newMatches.findIndex((m) => m.start >= cursorPos);
+                if (idx === -1) idx = 0;
+                setReplaceCurrentIndex(idx);
+                const match = newMatches[idx];
+                requestAnimationFrame(() => {
+                  textarea.focus();
+                  textarea.setSelectionRange(match.start, match.end);
+                  scrollToMatch(textarea, match.start);
+                });
+              } else {
+                setReplaceCurrentIndex(-1);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [
+    selectedId,
+    viewMode,
+    replaceOpen,
+    content,
+    replaceCaseSensitive,
+    replaceUseRegex,
+    replaceWholeWord,
+    scrollToMatch,
+  ]);
 
   useEffect(() => {
     if (!selectedId || saveState !== "dirty") return undefined;
@@ -2246,8 +2701,11 @@ export function MainWindow({
                       setGotoLineValue("");
                     }
                   }}
-                  placeholder={String(lineCount)}
-                  className="w-16 text-[12px] font-mono text-ink bg-transparent text-center tabular-nums placeholder:text-ink-ghost/50"
+                  placeholder={t("main.gotoLine.range", {
+                    count: lineCount,
+                    defaultValue: `1-${lineCount}`,
+                  })}
+                  className="w-16 text-[12px] font-mono text-ink bg-transparent tabular-nums placeholder:text-ink-ghost/50"
                 />
                 <span className="w-px h-4 bg-paper-deep/30" />
                 <button
@@ -2366,6 +2824,255 @@ export function MainWindow({
                     <path d="M2 2l8 8M10 2l-8 8" />
                   </svg>
                 </button>
+              </div>
+            )}
+            {replaceOpen && selectedId && (
+              <div className="absolute top-12 right-4 z-40 flex-col gap-1.5 py-2 px-3 rounded-lg bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 shadow-lg animate-menu-enter min-w-[420px]">
+                {/* 第一行：查找（替换面板独立 state） */}
+                <div className="flex items-center gap-2">
+                  <span className="w-10 text-right shrink-0 text-[11px] font-body text-ink-faint">
+                    {t("main.find.label", { defaultValue: "查找" })}
+                  </span>
+                  <input
+                    ref={replaceFindInputRef}
+                    type="text"
+                    autoFocus
+                    value={replaceQuery}
+                    onChange={(event) => handleReplaceFindChange(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        // 不触发查找，仅导航 — 查找需要通过按钮触发
+                        if (replaceSearched) {
+                          if (event.shiftKey) {
+                            const total = replaceMatches.length;
+                            if (total === 0) return;
+                            const idx =
+                              ((replaceCurrentIndex >= 0 ? replaceCurrentIndex : 0) - 1 + total) %
+                              total;
+                            setReplaceCurrentIndex(idx);
+                            const textarea = contentRef.current;
+                            if (textarea) {
+                              const match = replaceMatches[idx];
+                              textarea.focus();
+                              textarea.setSelectionRange(match.start, match.end);
+                              scrollToMatch(textarea, match.start);
+                            }
+                          } else {
+                            const total = replaceMatches.length;
+                            if (total === 0) return;
+                            const idx =
+                              ((replaceCurrentIndex >= 0 ? replaceCurrentIndex : -1) + 1) % total;
+                            setReplaceCurrentIndex(idx);
+                            const textarea = contentRef.current;
+                            if (textarea) {
+                              const match = replaceMatches[idx];
+                              textarea.focus();
+                              textarea.setSelectionRange(match.start, match.end);
+                              scrollToMatch(textarea, match.start);
+                            }
+                          }
+                        }
+                      } else if (event.key === "Escape") {
+                        event.preventDefault();
+                        handleReplaceClose();
+                      }
+                    }}
+                    placeholder=""
+                    className="flex-1 min-w-[120px] h-7 px-2 text-[12px] font-mono text-ink bg-transparent border border-paper-deep/20 rounded-md focus:border-bamboo/40 outline-none"
+                  />
+                  <span className="w-px h-4 bg-paper-deep/30 shrink-0" />
+                  <span className="text-[11px] font-mono text-ink-ghost tabular-nums min-w-[32px] text-center shrink-0">
+                    {!replaceSearched
+                      ? "—"
+                      : replaceMatches.length > 0
+                        ? `${replaceCurrentIndex + 1}/${replaceMatches.length}`
+                        : "0/0"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleReplaceFindPrev}
+                    disabled={replaceMatches.length === 0}
+                    className="w-6 h-6 flex items-center justify-center rounded text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default shrink-0"
+                    title={t("main.find.prev", { defaultValue: "上一个匹配" })}
+                  >
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 12 12"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    >
+                      <path d="M6 10V2M6 2L2 6M6 2l4 4" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleReplaceFindNext}
+                    disabled={replaceMatches.length === 0}
+                    className="w-6 h-6 flex items-center justify-center rounded text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default shrink-0"
+                    title={t("main.find.next", { defaultValue: "下一个匹配" })}
+                  >
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 12 12"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    >
+                      <path d="M6 2v8M6 10l4-4M6 10l-4-4" />
+                    </svg>
+                  </button>
+                  <span className="w-px h-4 bg-paper-deep/30 shrink-0" />
+                  <button
+                    type="button"
+                    onClick={handleReplaceClose}
+                    className="w-6 h-6 flex items-center justify-center rounded text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer shrink-0"
+                    title={t("common.close", { defaultValue: "关闭" })}
+                  >
+                    <svg
+                      width="11"
+                      height="11"
+                      viewBox="0 0 12 12"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    >
+                      <path d="M2 2l8 8M10 2l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+                {/* 第二行：替换 — 对齐设计 */}
+                <div className="flex items-center gap-2">
+                  <span className="w-10 text-right shrink-0 text-[11px] font-body text-ink-faint">
+                    {t("main.replace.label", { defaultValue: "替换为" })}
+                  </span>
+                  <input
+                    ref={replaceInputRef}
+                    type="text"
+                    value={replaceValue}
+                    onChange={(event) => setReplaceValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        handleReplaceCurrent();
+                      } else if (event.key === "Escape") {
+                        event.preventDefault();
+                        handleReplaceClose();
+                      }
+                    }}
+                    placeholder=""
+                    className="flex-1 min-w-[120px] h-7 px-2 text-[12px] font-mono text-ink bg-transparent border border-paper-deep/20 rounded-md focus:border-bamboo/40 outline-none"
+                  />
+                  <span className="w-px h-4 bg-paper-deep/30 shrink-0" />
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleReplaceFindExecute("next")}
+                      disabled={!replaceQuery}
+                      className="px-2 h-6 text-[11px] font-mono rounded-md border border-paper-deep/30 text-ink-ghost hover:text-ink-soft hover:border-ink-ghost/30 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default"
+                    >
+                      {t("main.find.label", { defaultValue: "查找" })}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleReplaceCurrent}
+                      disabled={!replaceQuery || replaceMatches.length === 0}
+                      className="px-2 h-6 text-[11px] font-mono rounded-md border border-paper-deep/30 text-ink-ghost hover:text-ink-soft hover:border-ink-ghost/30 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default"
+                    >
+                      {t("main.replace.btn", { defaultValue: "替换" })}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleReplaceAll}
+                      disabled={!replaceQuery}
+                      className="px-2 h-6 text-[11px] font-mono rounded-md border border-paper-deep/30 text-ink-ghost hover:text-ink-soft hover:border-ink-ghost/30 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default"
+                    >
+                      {t("main.replace.replaceAll", { defaultValue: "全部替换" })}
+                    </button>
+                  </div>
+                </div>
+                {/* 第三行：选项 + 范围 + 替换计数 */}
+                <div className="flex items-center gap-2">
+                  <span className="w-10 text-right shrink-0 text-[11px] font-body text-ink-faint">
+                    {t("main.replace.options.label", { defaultValue: "选项" })}
+                  </span>
+                  <div className="flex gap-1.5 flex-1 items-center">
+                    <button
+                      type="button"
+                      onClick={() => setReplaceCaseSensitive(!replaceCaseSensitive)}
+                      className={`px-2 h-6 text-[11px] rounded-md border transition-colors cursor-pointer ${
+                        replaceCaseSensitive
+                          ? "bg-bamboo/15 text-bamboo border-bamboo/30"
+                          : "bg-transparent text-ink-ghost border-paper-deep/30 hover:border-ink-ghost/30"
+                      }`}
+                      title={t("main.replace.options.caseSensitive", {
+                        defaultValue: "匹配大小写",
+                      })}
+                    >
+                      Aa
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReplaceUseRegex(!replaceUseRegex)}
+                      className={`px-2 h-6 text-[11px] rounded-md border transition-colors cursor-pointer ${
+                        replaceUseRegex
+                          ? "bg-bamboo/15 text-bamboo border-bamboo/30"
+                          : "bg-transparent text-ink-ghost border-paper-deep/30 hover:border-ink-ghost/30"
+                      }`}
+                      title={t("main.replace.options.regex", { defaultValue: "使用正则表达式" })}
+                    >
+                      .*
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReplaceWholeWord(!replaceWholeWord)}
+                      className={`px-2 h-6 text-[11px] rounded-md border transition-colors cursor-pointer ${
+                        replaceWholeWord
+                          ? "bg-bamboo/15 text-bamboo border-bamboo/30"
+                          : "bg-transparent text-ink-ghost border-paper-deep/30 hover:border-ink-ghost/30"
+                      }`}
+                      title={t("main.replace.options.wholeWord", { defaultValue: "全字匹配" })}
+                    >
+                      <span style={{ textDecoration: "underline" }}>ab</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReplacePreserveCase(!replacePreserveCase)}
+                      className={`px-2 h-6 text-[11px] rounded-md border transition-colors cursor-pointer ${
+                        replacePreserveCase
+                          ? "bg-bamboo/15 text-bamboo border-bamboo/30"
+                          : "bg-transparent text-ink-ghost border-paper-deep/30 hover:border-ink-ghost/30"
+                      }`}
+                      title={t("main.replace.options.preserveCase", { defaultValue: "保留大小写" })}
+                    >
+                      AB
+                    </button>
+                    <span className="w-px h-4 bg-paper-deep/30 mx-1" />
+                    <select
+                      value={replaceScope}
+                      onChange={(e) => setReplaceScope(e.target.value as "current" | "all")}
+                      className="px-2 h-6 text-[11px] font-mono rounded-md border border-paper-deep/30 bg-transparent text-ink-ghost hover:text-ink-soft hover:border-ink-ghost/30 transition-colors cursor-pointer outline-none"
+                    >
+                      <option value="current">
+                        {t("main.replace.scope.current", { defaultValue: "当前笔记" })}
+                      </option>
+                      <option value="all">
+                        {t("main.replace.scope.all", { defaultValue: "所有笔记" })}
+                      </option>
+                    </select>
+                    <span className="text-[11px] font-mono text-bamboo tabular-nums ml-auto">
+                      {replaceAllCount !== null
+                        ? `${t("main.replace.replacedCount", { defaultValue: "成功替换{{count}}处", count: replaceAllCount })}`
+                        : ""}
+                    </span>
+                  </div>
+                </div>
               </div>
             )}
             <div className="flex items-center justify-between px-4 h-10 border-b border-paper-deep/20 shrink-0 bg-paper/20">
@@ -2673,6 +3380,11 @@ export function MainWindow({
                               if (findOpen) {
                                 setFindOpen(false);
                                 setFindSearched(false);
+                                if (highlightRef.current) highlightRef.current.innerHTML = "";
+                              }
+                              if (replaceOpen) {
+                                setReplaceOpen(false);
+                                setReplaceSearched(false);
                                 if (highlightRef.current) highlightRef.current.innerHTML = "";
                               }
                             }}

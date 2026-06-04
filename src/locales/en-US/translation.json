@@ -76,12 +76,31 @@
       "redoLabel": "Redo"
     },
     "gotoLine": {
-      "label": "Go to line"
+      "label": "Go to line",
+      "range": "1-{{count}}"
     },
     "find": {
       "label": "Find",
       "prev": "Previous match",
       "next": "Next match"
+    },
+    "replace": {
+      "label": "Replace with",
+      "btn": "Replace",
+      "replaceAll": "Replace All",
+      "replacedCount": "Replaced {{count}}",
+      "confirmAll": "Replace in all notes?\n({{count}} notes, cannot be undone)",
+      "options": {
+        "label": "Options",
+        "caseSensitive": "Aa",
+        "regex": ".*",
+        "wholeWord": "Whole Word",
+        "preserveCase": "Preserve Case"
+      },
+      "scope": {
+        "current": "Current Note",
+        "all": "All Notes"
+      }
     },
     "externalFile": {
       "label": "External File · {{path}}"

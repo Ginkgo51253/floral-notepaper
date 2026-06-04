@@ -76,12 +76,31 @@
       "redoLabel": "重做"
     },
     "gotoLine": {
-      "label": "跳转行"
+      "label": "跳转行",
+      "range": "1-{{count}}"
     },
     "find": {
       "label": "查找",
       "prev": "上一个匹配",
       "next": "下一个匹配"
+    },
+    "replace": {
+      "label": "替换为",
+      "btn": "替换",
+      "replaceAll": "全部替换",
+      "replacedCount": "成功替换{{count}}处",
+      "confirmAll": "确定要在所有笔记中执行替换？\n（共 {{count}} 篇，此操作不可撤销）",
+      "options": {
+        "label": "选项",
+        "caseSensitive": "Aa",
+        "regex": ".*",
+        "wholeWord": "全字匹配",
+        "preserveCase": "保留大小写"
+      },
+      "scope": {
+        "current": "当前笔记",
+        "all": "所有笔记"
+      }
     },
     "externalFile": {
       "label": "外部文件 · {{path}}"
