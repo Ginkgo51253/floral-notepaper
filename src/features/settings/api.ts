@@ -12,6 +12,10 @@ export function getConfig(): Promise<AppConfig> {
   return invoke("config_get");
 }
 
+export function listSystemFonts(): Promise<string[]> {
+  return invoke("system_fonts_list");
+}
+
 export function saveConfig(config: AppConfig): Promise<AppConfig> {
   return invoke("config_save", { config });
 }

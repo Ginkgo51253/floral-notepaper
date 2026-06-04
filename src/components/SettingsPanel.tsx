@@ -1,7 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { checkGlobalShortcut, chooseBackgroundImage } from "../features/settings/api";
+import { applyFontFamily } from "../features/settings/fonts";
+import {
+  checkGlobalShortcut,
+  chooseBackgroundImage,
+  listSystemFonts,
+} from "../features/settings/api";
 import type {
   AppConfig,
   BackgroundFit,
@@ -32,6 +37,22 @@ interface SettingsPanelProps {
 
 export function SettingsPanel({ config, onChange, onChooseNotesDir, onClose }: SettingsPanelProps) {
   const { t } = useTranslation();
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listSystemFonts()
+      .then((fonts) => {
+        if (!cancelled) setSystemFonts(fonts);
+      })
+      .catch(() => {
+        if (!cancelled) setSystemFonts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const setConfigValue = <Key extends keyof AppConfig>(key: Key, value: AppConfig[Key]) => {
     onChange({ ...config, [key]: value });
   };
@@ -244,6 +265,33 @@ export function SettingsPanel({ config, onChange, onChooseNotesDir, onClose }: S
               onChange={(v) => setConfigValue("toggleVisibilityShortcut", v)}
             />
           </div>
+        </section>
+
+        <section className="space-y-2">
+          <label className="block text-[11px] font-body text-ink-faint">
+            {t("settings.fontFamily.label", { defaultValue: "字体" })}
+          </label>
+          <select
+            value={config.fontFamily ?? ""}
+            onChange={(event) => {
+              const value = event.target.value;
+              setConfigValue("fontFamily", value);
+              applyFontFamily(value);
+            }}
+            className="w-full h-9 px-2.5 rounded-lg bg-paper-warm/45 border border-paper-deep/25 text-[12px] font-body text-ink-soft cursor-pointer appearance-none"
+          >
+            <option value="">{t("settings.fontFamily.default", { defaultValue: "默认" })}</option>
+            {(config.fontFamily &&
+            !systemFonts.includes(config.fontFamily) &&
+            config.fontFamily.trim()
+              ? [config.fontFamily, ...systemFonts]
+              : systemFonts
+            ).map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
         </section>
 
         <section className="space-y-2">

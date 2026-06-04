@@ -1,4 +1,5 @@
 pub mod desktop;
+pub mod fonts;
 pub mod locales;
 pub mod services;
 
@@ -354,7 +355,8 @@ pub fn run() {
             open_tile_window,
             toggle_tile_window,
             open_note_in_editor,
-            take_startup_file
+            take_startup_file,
+            fonts::system_fonts_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

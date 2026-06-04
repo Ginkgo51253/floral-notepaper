@@ -195,6 +195,10 @@
       "preview": "Preview",
       "split": "Split"
     },
+    "fontFamily": {
+      "default": "Default",
+      "label": "Font"
+    },
     "fontSize": {
       "editor": "Editor font size",
       "surface": "Surface font size"

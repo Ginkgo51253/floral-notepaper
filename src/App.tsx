@@ -6,6 +6,7 @@ import { NotePad } from "./components/NotePad";
 import { TileShowcase } from "./components/TileShowcase";
 import { tabToIndentListener } from "indent-textarea";
 import { getConfig } from "./features/settings/api";
+import { applyFontFamily } from "./features/settings/fonts";
 import { applyTheme, watchSystemTheme } from "./features/settings/theme";
 import type { AppConfig, ThemeOption } from "./features/settings/types";
 import { getInitialRoute } from "./features/windows/windowRoutes";
@@ -27,6 +28,7 @@ function App() {
           "--tab-indent-size",
           String(config.tabIndentSize ?? 2),
         );
+        applyFontFamily(config.fontFamily ?? "");
         void syncLanguage(config.locale);
       })
       .catch(() => {});
@@ -44,6 +46,7 @@ function App() {
         "--tab-indent-size",
         String(event.payload.tabIndentSize ?? 2),
       );
+      applyFontFamily(event.payload.fontFamily ?? "");
       void syncLanguage(event.payload.locale);
     });
     return () => {

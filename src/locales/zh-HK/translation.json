@@ -195,6 +195,10 @@
       "preview": "預覽",
       "split": "分欄"
     },
+    "fontFamily": {
+      "default": "預設",
+      "label": "字體"
+    },
     "fontSize": {
       "editor": "編輯器字級",
       "surface": "小窗／磁貼字級"
