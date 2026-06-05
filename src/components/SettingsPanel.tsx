@@ -23,7 +23,7 @@ import {
 import { useShortcutRecorder } from "../features/settings/useShortcutRecorder";
 import { DEFAULT_TILE_COLOR, normalizeTileColor } from "../features/settings/tileColor";
 import { applyTheme, watchSystemTheme } from "../features/settings/theme";
-import { SUPPORTED_LOCALES } from "../locales/locale-whitelist";
+import { LOCALE_OPTIONS } from "../locales/locale-whitelist";
 import { SlidingButtonGroup } from "./SlidingButtonGroup";
 
 const HARMONY_FONT_LICENSE_URL = new URL("../assets/fonts/LICENSE_Fonts", import.meta.url).href;
@@ -101,14 +101,9 @@ export function SettingsPanel({ config, onChange, onChooseNotesDir, onClose }: S
   );
   const localeOptions = useMemo(
     () =>
-      SUPPORTED_LOCALES.map((locale) => ({
-        value: locale,
-        label:
-          locale === "zh-CN"
-            ? t("settings.locale.zhCN", { defaultValue: "简体中文" })
-            : locale === "en-US"
-              ? t("settings.locale.enUS", { defaultValue: "English" })
-              : t("settings.locale.zhHK", { defaultValue: "繁體中文" }),
+      LOCALE_OPTIONS.map(({ value, labelKey, defaultLabel }) => ({
+        value,
+        label: t(labelKey, { defaultValue: defaultLabel }),
       })),
     [t],
   );

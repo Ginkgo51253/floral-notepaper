@@ -28,9 +28,9 @@
 
 <!-- 提供复现和验证步骤。Provide steps to verify the change. -->
 
-1. 
-2. 
-3. 
+1.
+2.
+3.
 
 ## Checklist / 检查清单
 
