@@ -233,6 +233,11 @@ export function SettingsPanel({ config, onChange, onChooseNotesDir, onClose }: S
             checked={config.showLineNumbers ?? true}
             onChange={(checked) => setConfigValue("showLineNumbers", checked)}
           />
+          <ToggleRow
+            label={t("settings.wordWrap", { defaultValue: "主编辑窗口自动换行" })}
+            checked={config.wordWrap ?? true}
+            onChange={(checked) => setConfigValue("wordWrap", checked)}
+          />
         </section>
 
         {/* 快捷键功能设置区域，与上方常规设置分开 */}

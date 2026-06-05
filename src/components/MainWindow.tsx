@@ -547,6 +547,77 @@ export function MainWindow({
   const charCount = useMemo(() => countNoteChars(content), [content]);
   const editorFontSize = settingsConfig?.fontSize ?? 14;
   const showLineNumbers = settingsConfig?.showLineNumbers ?? true;
+  const wordWrap = settingsConfig?.wordWrap ?? true;
+
+  // 视觉行测量：当自动换行开启时，每个逻辑行可能占多个视觉行
+  const lineMeasureRef = useRef<HTMLDivElement>(null);
+  const [visualLineCounts, setVisualLineCounts] = useState<number[]>([1]);
+
+  const recalcVisualLines = useCallback(() => {
+    if (!wordWrap) {
+      setVisualLineCounts([]);
+      return;
+    }
+    const textarea = contentRef.current;
+    const measure = lineMeasureRef.current;
+    if (!textarea || !measure) return;
+
+    const logicalLines = content.split("\n");
+    const taStyle = getComputedStyle(textarea);
+    const pl = parseFloat(taStyle.paddingLeft) || 0;
+    const pr = parseFloat(taStyle.paddingRight) || 0;
+    const width = textarea.clientWidth - pl - pr;
+
+    measure.style.width = `${width}px`;
+    measure.style.font = taStyle.font;
+    measure.style.lineHeight = taStyle.lineHeight;
+    measure.style.letterSpacing = taStyle.letterSpacing;
+    measure.style.wordSpacing = taStyle.wordSpacing;
+
+    const lineH = editorFontSize * 1.9;
+    const counts: number[] = [];
+    for (const line of logicalLines) {
+      measure.textContent = line || "\u200B"; // 零宽空格保证空行可测高
+      counts.push(Math.max(1, Math.round(measure.offsetHeight / lineH)));
+    }
+    setVisualLineCounts((prev) =>
+      prev.length === counts.length && prev.every((v, i) => v === counts[i]) ? prev : counts,
+    );
+  }, [content, wordWrap, editorFontSize]);
+
+  // 内容或换行设置变化时重算视觉行
+  useEffect(() => {
+    recalcVisualLines();
+  }, [recalcVisualLines]);
+
+  // 窗口 resize 时重算
+  useEffect(() => {
+    if (!wordWrap) return;
+    const textarea = contentRef.current;
+    if (!textarea) return;
+    // 使用容器元素来检测 resize
+    const container = textarea.parentElement;
+    if (!container) return;
+    const observer = new ResizeObserver(() => {
+      recalcVisualLines();
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [wordWrap, recalcVisualLines]);
+
+  // 生成行号数组（换行开启时：每个逻辑行 i 重复 N 次）
+  const lineNumberRows = useMemo(() => {
+    if (!wordWrap || visualLineCounts.length === 0) {
+      return Array.from({ length: content.split("\n").length }, (_, i) => i + 1);
+    }
+    const rows: number[] = [];
+    visualLineCounts.forEach((count, i) => {
+      for (let j = 0; j < count; j++) {
+        rows.push(i + 1);
+      }
+    });
+    return rows;
+  }, [wordWrap, visualLineCounts, content]);
 
   const applyNote = useCallback((note: Note) => {
     setSelectedId(note.id);
@@ -3873,25 +3944,52 @@ export function MainWindow({
                             className="shrink-0 h-full overflow-hidden text-right pr-3 mr-3 border-r border-paper-deep/30 text-ink-ghost/50 font-mono tabular-nums select-none"
                             style={{ fontSize: `${editorFontSize}px` }}
                           >
-                            {Array.from({ length: lineCount }, (_, index) => (
-                              <div key={index} style={{ lineHeight: 1.9 }}>
-                                {index + 1}
-                              </div>
-                            ))}
+                            {lineNumberRows.map((num, index, arr) => {
+                              const isFirst = index === 0 || num !== arr[index - 1];
+                              return (
+                                <div
+                                  key={index}
+                                  style={{ lineHeight: 1.9 }}
+                                  className={isFirst ? "" : "opacity-40"}
+                                >
+                                  {num}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                         <div className="flex-1 relative min-w-0 self-stretch">
+                          {/* 视觉行测量元素（隐藏）：与 textarea 同宽/同字体，用于测量换行 */}
+                          <div
+                            ref={lineMeasureRef}
+                            aria-hidden="true"
+                            className="absolute invisible pointer-events-none top-0 left-0"
+                            style={{
+                              fontSize: `${editorFontSize}px`,
+                              fontFamily: "inherit",
+                              lineHeight: "1.9",
+                              tabSize: "var(--tab-indent-size, 2)",
+                              whiteSpace: "pre-wrap",
+                              wordWrap: "break-word",
+                              overflowWrap: "break-word",
+                            }}
+                          />
                           <div
                             ref={highlightRef}
                             className="find-highlight-layer absolute inset-0 leading-[1.9] font-body"
                             style={{
                               fontSize: `${editorFontSize}px`,
+                              tabSize: "var(--tab-indent-size, 2)",
+                              whiteSpace: wordWrap ? "pre-wrap" : "pre",
+                              wordWrap: wordWrap ? "break-word" : "normal",
+                              overflow: "hidden",
                             }}
                           />
                           <textarea
                             ref={contentRef}
                             data-tab-indent="true"
                             value={content}
+                            wrap={wordWrap ? "soft" : "off"}
                             onChange={(event) => {
                               setContent(event.target.value);
                               markDirty();
@@ -3908,11 +4006,15 @@ export function MainWindow({
                               }
                             }}
                             onScroll={(event) => {
+                              const ta = event.currentTarget;
                               if (lineNumbersRef.current) {
-                                lineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
+                                lineNumbersRef.current.scrollTop = ta.scrollTop;
                               }
                               if (highlightRef.current) {
-                                highlightRef.current.scrollTop = event.currentTarget.scrollTop;
+                                highlightRef.current.scrollTop = ta.scrollTop;
+                                if (!wordWrap) {
+                                  highlightRef.current.scrollLeft = ta.scrollLeft;
+                                }
                               }
                             }}
                             onPaste={imagePasteHandler}
@@ -3922,6 +4024,8 @@ export function MainWindow({
                             style={{
                               fontSize: `${editorFontSize}px`,
                               tabSize: `var(--tab-indent-size, 2)`,
+                              whiteSpace: wordWrap ? "pre-wrap" : "pre",
+                              overflowWrap: wordWrap ? "break-word" : "normal",
                             }}
                             placeholder={t("main.editor.contentPlaceholder", {
                               defaultValue: "开始写作……",
@@ -3946,7 +4050,7 @@ export function MainWindow({
                         className={`absolute inset-y-0 -left-1.5 -right-1.5 ${isResizingSplit ? "" : "group-hover:bg-bamboo/5"}`}
                       />
                       {/* 拖拽手柄指示器 */}
-                      <div className="relative z-10 flex flex-col gap-[3px] opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="relative z-10 flex flex-col gap-[3px] opacity-30 group-hover:opacity-100 transition-opacity">
                         <div className="w-[3px] h-[3px] rounded-full bg-ink-ghost/60" />
                         <div className="w-[3px] h-[3px] rounded-full bg-ink-ghost/60" />
                         <div className="w-[3px] h-[3px] rounded-full bg-ink-ghost/60" />

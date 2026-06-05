@@ -74,6 +74,8 @@ pub struct AppConfig {
     pub render_html_markdown: bool,
     #[serde(default = "default_show_line_numbers")]
     pub show_line_numbers: bool,
+    #[serde(default = "default_word_wrap")]
+    pub word_wrap: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -770,6 +772,7 @@ impl NoteStore {
             tile_render_markdown: false,
             render_html_markdown: false,
             show_line_numbers: default_show_line_numbers(),
+            word_wrap: default_word_wrap(),
             surface_width: None,
             surface_height: None,
             toggle_visibility_shortcut: default_toggle_visibility_shortcut(),
@@ -1135,6 +1138,10 @@ fn default_open_at_cursor() -> bool {
 }
 
 fn default_show_line_numbers() -> bool {
+    true
+}
+
+fn default_word_wrap() -> bool {
     true
 }
 

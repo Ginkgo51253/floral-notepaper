@@ -279,6 +279,7 @@
     "tileRenderMarkdown": "磁貼渲染 Markdown",
     "renderHtmlMarkdown": "允許 HTML 標籤渲染",
     "showLineNumbers": "編輯區顯示行號",
+    "wordWrap": "主編輯視窗自動換行",
     "title": "應用程式設定",
     "visibilityShortcut": "顯示／隱藏視窗快捷鍵",
     "background": {

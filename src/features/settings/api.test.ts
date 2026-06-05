@@ -51,6 +51,7 @@ describe("settings api", () => {
       tileRenderMarkdown: false,
       renderHtmlMarkdown: false,
       showLineNumbers: true,
+      wordWrap: true,
       openAtCursor: true,
     };
     mockedInvoke.mockResolvedValue(config);
@@ -84,6 +85,7 @@ describe("settings api", () => {
       tileRenderMarkdown: false,
       renderHtmlMarkdown: false,
       showLineNumbers: true,
+      wordWrap: true,
       openAtCursor: true,
     };
     mockedInvoke.mockResolvedValue(config);

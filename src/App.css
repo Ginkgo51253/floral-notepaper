@@ -212,16 +212,18 @@ body {
 
 ::-webkit-scrollbar {
   width: 4px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
+  height: 4px;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--color-ink-ghost);
   border-radius: 2px;
+  cursor: pointer;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-ink-faint);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .scrollbar-hidden::-webkit-scrollbar {
@@ -286,9 +288,6 @@ input::placeholder {
 /* Find-in-page highlight layer */
 .find-highlight-layer {
   color: transparent;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  overflow: hidden;
   pointer-events: none;
 }
 .find-highlight-layer mark.fh-match {

@@ -279,6 +279,7 @@
     "tileRenderMarkdown": "Render Markdown on tile",
     "renderHtmlMarkdown": "Render HTML tags in Markdown",
     "showLineNumbers": "Show line numbers in editor",
+    "wordWrap": "Word wrap in editor",
     "title": "Settings",
     "visibilityShortcut": "Show/Hide window shortcut",
     "background": {
