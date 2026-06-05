@@ -24,7 +24,7 @@ export function findAll(
 
   if (useRegex) {
     try {
-      const flags = caseSensitive ? "g" : "gi";
+      const flags = "gum" + (caseSensitive ? "" : "i");
       const regex = new RegExp(query, flags);
       results = [];
       let match: RegExpExecArray | null;
@@ -176,7 +176,7 @@ function execMatchAt(
   caseSensitive: boolean,
 ): { match: string; groups: string[] } | null {
   try {
-    const regex = new RegExp(query, caseSensitive ? "" : "i");
+    const regex = new RegExp(query, "um" + (caseSensitive ? "" : "i"));
     const execResult = regex.exec(fullContent.slice(start));
     if (!execResult || execResult.index !== 0 || execResult[0].length !== end - start) {
       return null;

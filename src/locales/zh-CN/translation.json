@@ -97,8 +97,8 @@
       },
       "options": {
         "label": "选项",
-        "caseSensitive": "Aa",
-        "regex": ".*",
+        "caseSensitive": "匹配大小写",
+        "regex": "正则表达式",
         "wholeWord": "全字匹配",
         "preserveCase": "保留大小写"
       },

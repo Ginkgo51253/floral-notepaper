@@ -93,3 +93,99 @@ describe("findReplace wholeWord", () => {
     expect(matches).toEqual([{ start: 8, end: 12 }]);
   });
 });
+
+describe("findReplace regex with unicode/multiline flags", () => {
+  it("[A-Z]+ case-sensitive matches only uppercase", () => {
+    const matches = findAll("Hello WORLD", "[A-Z]+", true, true);
+    expect(matches).toEqual([
+      { start: 0, end: 1 },
+      { start: 6, end: 11 },
+    ]);
+  });
+
+  it("[A-Z]+ case-insensitive matches per-word (space splits)", () => {
+    const matches = findAll("Hello WORLD", "[A-Z]+", false, true);
+    // /[A-Z]+/gi: space breaks continuity, giving two matches
+    expect(matches).toEqual([
+      { start: 0, end: 5 },
+      { start: 6, end: 11 },
+    ]);
+  });
+
+  it("[a-z]+ case-sensitive matches only lowercase", () => {
+    const matches = findAll("hello WORLD", "[a-z]+", true, true);
+    expect(matches).toEqual([{ start: 0, end: 5 }]);
+  });
+
+  it("[a-z]+ case-insensitive matches per-word (space splits)", () => {
+    const matches = findAll("hello WORLD", "[a-z]+", false, true);
+    // /[a-z]+/gi: space breaks continuity, giving two matches
+    expect(matches).toEqual([
+      { start: 0, end: 5 },
+      { start: 6, end: 11 },
+    ]);
+  });
+
+  it("\\w+ matches ASCII word characters", () => {
+    const matches = findAll("foo bar_baz 123", "\\w+", false, true);
+    expect(matches).toEqual([
+      { start: 0, end: 3 },
+      { start: 4, end: 11 },
+      { start: 12, end: 15 },
+    ]);
+  });
+
+  it("\\w+ does not match CJK (use \\p{L}+ instead)", () => {
+    // \w = [a-zA-Z0-9_] in JS, even with u flag. CJK needs \p{L}
+    const matches = findAll("你好 world 世界", "\\w+", false, true);
+    // Only "world" matches \w+; 你好/世界 do NOT
+    expect(matches).toEqual([{ start: 3, end: 8 }]);
+  });
+
+  it("\\p{L}+ matches CJK with u flag", () => {
+    const matches = findAll("你好 world 世界", "\\p{L}+", false, true);
+    expect(matches).toEqual([
+      { start: 0, end: 2 },
+      { start: 3, end: 8 },
+      { start: 9, end: 11 },
+    ]);
+  });
+
+  it("^ anchor matches line starts with m flag", () => {
+    const content = "line1\nline2\nline3";
+    const matches = findAll(content, "^line\\d", false, true);
+    expect(matches).toEqual([
+      { start: 0, end: 5 },
+      { start: 6, end: 11 },
+      { start: 12, end: 17 },
+    ]);
+  });
+
+  it("$ anchor matches line ends with m flag", () => {
+    const content = "a1\nb2\nc3";
+    const matches = findAll(content, "\\d$", false, true);
+    expect(matches).toEqual([
+      { start: 1, end: 2 },
+      { start: 4, end: 5 },
+      { start: 7, end: 8 },
+    ]);
+  });
+
+  it("invalid regex returns empty array instead of throwing", () => {
+    const matches = findAll("hello", "[", false, true);
+    expect(matches).toEqual([]);
+  });
+
+  it("\\p{L} unicode property works with u flag", () => {
+    const matches = findAll("Hello World", "\\p{L}+", false, true);
+    expect(matches).toEqual([
+      { start: 0, end: 5 },
+      { start: 6, end: 11 },
+    ]);
+  });
+
+  it("\\p{N} unicode digit property works with u flag", () => {
+    const matches = findAll("价格99元", "\\p{N}+", false, true);
+    expect(matches).toEqual([{ start: 2, end: 4 }]);
+  });
+});
