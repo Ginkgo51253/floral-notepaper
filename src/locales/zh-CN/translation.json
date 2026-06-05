@@ -90,7 +90,11 @@
       "replaceAll": "全部替换",
       "matchCount": "匹配{{count}}处",
       "replacedCount": "成功替换{{count}}处",
-      "confirmAll": "确定要在所有笔记中执行替换？\n（共 {{count}} 篇，此操作不可撤销）",
+      "batchConfirm": {
+        "category": "即将修改 {{fileCount}} 份文件，共计 {{matchCount}} 个匹配项（「{{category}}」分类）。此操作无法通过 Ctrl+Z 撤回。",
+        "all": "即将修改 {{fileCount}} 份文件，共计 {{matchCount}} 个匹配项。此操作无法通过 Ctrl+Z 撤回。",
+        "confirm": "确认"
+      },
       "options": {
         "label": "选项",
         "caseSensitive": "Aa",

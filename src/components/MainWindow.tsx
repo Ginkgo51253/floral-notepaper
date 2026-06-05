@@ -276,6 +276,43 @@ function runEditorCommand(textarea: HTMLTextAreaElement | null, command: "undo" 
   return document.execCommand(command);
 }
 
+/** 在 textarea 选区内 insertText，写入原生撤销栈。返回更新后的全文。 */
+function applyTextareaRangeReplace(
+  textarea: HTMLTextAreaElement,
+  start: number,
+  end: number,
+  replacement: string,
+  focusEditor = true,
+): string {
+  if (focusEditor) textarea.focus();
+  textarea.setSelectionRange(start, end);
+  document.execCommand("insertText", false, replacement);
+  return textarea.value;
+}
+
+/** 一次性替换 textarea 全文，单次撤销可恢复。返回更新后的全文。 */
+function applyTextareaFullContent(textarea: HTMLTextAreaElement, newContent: string): string {
+  textarea.focus();
+  textarea.setSelectionRange(0, textarea.value.length);
+  document.execCommand("insertText", false, newContent);
+  return textarea.value;
+}
+
+interface ReplaceBatchConfirmState {
+  scope: "category" | "all";
+  noteCount: number;
+  affectedNoteCount: number;
+  matchCount: number;
+  categoryName: string;
+}
+
+/** 侧栏搜索、标题等非编辑区输入框内不拦截 Ctrl+F / Ctrl+H */
+function shouldSkipEditorShortcut(event: KeyboardEvent): boolean {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return false;
+  return target.closest("[data-editor-shortcut-skip]") !== null;
+}
+
 export function pinTileButtonTitle(isPinned: boolean): string {
   return isPinned ? "取消钉屏" : "钉到屏幕";
 }
@@ -359,9 +396,14 @@ export function MainWindow({
   >(new Map());
   const replaceNavInProgressRef = useRef(false);
   const prevReplaceCategoryRef = useRef<string | null>(null);
-  const replaceAllPrevContentRef = useRef<string | null>(null);
+  const [replaceBatchConfirm, setReplaceBatchConfirm] = useState<ReplaceBatchConfirmState | null>(
+    null,
+  );
   const replaceFindInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  const replaceOpenRef = useRef(false);
+  const replaceApplyingRef = useRef(false);
+  replaceOpenRef.current = replaceOpen;
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
@@ -827,36 +869,11 @@ export function MainWindow({
         event.preventDefault();
         void saveCurrentNote();
       }
-      // 全部替换后的 Ctrl+Z 撤销
-      if (
-        (event.ctrlKey || event.metaKey) &&
-        event.key === "z" &&
-        replaceAllPrevContentRef.current
-      ) {
-        const textarea = contentRef.current;
-        if (textarea && textarea.value === content) {
-          event.preventDefault();
-          const prev = replaceAllPrevContentRef.current;
-          replaceAllPrevContentRef.current = null;
-          textarea.focus();
-          textarea.select();
-          document.execCommand("insertText", false, prev);
-          setContent(prev);
-          setReplaceAllCount(null);
-          // 重算匹配
-          const newMatches = findAll(prev, replaceQuery, replaceCaseSensitive, replaceUseRegex);
-          setReplaceMatches(newMatches);
-          setReplaceSearched(true);
-          if (newMatches.length > 0) {
-            setReplaceCurrentIndex(0);
-          }
-        }
-      }
     }
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [saveCurrentNote, content, replaceQuery, replaceCaseSensitive, replaceUseRegex]);
+  }, [saveCurrentNote]);
 
   const handleGotoLineSubmit = useCallback(() => {
     const parsed = Number.parseInt(gotoLineValue, 10);
@@ -880,6 +897,12 @@ export function MainWindow({
     setGotoLineValue("");
   }, [content, editorFontSize, gotoLineValue]);
 
+  const focusReplacePanelInput = useCallback(() => {
+    requestAnimationFrame(() => {
+      replaceFindInputRef.current?.focus();
+    });
+  }, []);
+
   const scrollToMatch = useCallback(
     (textarea: HTMLTextAreaElement, matchStart: number) => {
       const lineHeight = editorFontSize * 1.9;
@@ -889,8 +912,26 @@ export function MainWindow({
       if (lineNumbersRef.current) {
         lineNumbersRef.current.scrollTop = textarea.scrollTop;
       }
+      if (highlightRef.current) {
+        highlightRef.current.scrollTop = textarea.scrollTop;
+      }
     },
     [editorFontSize],
+  );
+
+  const syncReplaceMatchesForNote = useCallback(
+    (noteContent: string, query: string) => {
+      const localMatches = findAll(
+        noteContent,
+        query,
+        replaceCaseSensitive,
+        replaceUseRegex,
+        replaceWholeWord,
+      );
+      setReplaceMatches(localMatches);
+      return localMatches;
+    },
+    [replaceCaseSensitive, replaceUseRegex, replaceWholeWord],
   );
 
   const handleFindChange = useCallback((value: string) => {
@@ -988,11 +1029,18 @@ export function MainWindow({
   const handleReplaceFindChange = useCallback((value: string) => {
     setReplaceQuery(value);
     setReplaceSearched(false);
+    setReplaceMatches([]);
+    setReplaceCrossMatches([]);
+    setReplaceCurrentIndex(-1);
+    setReplaceFindCount(null);
+    setReplaceAllCount(null);
   }, []);
 
   // 导航到某个匹配（自动切换笔记）
   const navigateToMatchAt = useCallback(
     (idx: number, matches: Range[], crossAllMatches: CrossNoteMatch[]) => {
+      const keepPanelFocus = replaceOpenRef.current;
+
       // 跨笔记模式：匹配在 crossAllMatches 中，需要处理笔记切换
       if (crossAllMatches.length > 0) {
         const cm = crossAllMatches[idx];
@@ -1013,19 +1061,25 @@ export function MainWindow({
           setSelectedId(cm.noteId);
           setTitle(noteData.title);
           setContent(noteData.content);
-          // 在下一个 tick 中设置选区（content 更新后 textarea 才持有新值）
+          // 在下一个 tick 中滚动可见（替换面板打开时保持面板焦点）
           requestAnimationFrame(() => {
             const ta = contentRef.current;
             if (ta) {
-              ta.setSelectionRange(cm.start, cm.end);
+              if (!keepPanelFocus) {
+                ta.setSelectionRange(cm.start, cm.end);
+              }
               scrollToMatch(ta, cm.start);
+              if (keepPanelFocus) focusReplacePanelInput();
             }
           });
         } else {
           const ta = contentRef.current;
           if (ta) {
-            ta.setSelectionRange(cm.start, cm.end);
+            if (!keepPanelFocus) {
+              ta.setSelectionRange(cm.start, cm.end);
+            }
             scrollToMatch(ta, cm.start);
+            if (keepPanelFocus) focusReplacePanelInput();
           }
         }
         return;
@@ -1036,11 +1090,14 @@ export function MainWindow({
       if (!match) return;
       const ta = contentRef.current;
       if (ta) {
-        ta.setSelectionRange(match.start, match.end);
+        if (!keepPanelFocus) {
+          ta.setSelectionRange(match.start, match.end);
+        }
         scrollToMatch(ta, match.start);
+        if (keepPanelFocus) focusReplacePanelInput();
       }
     },
-    [selectedId, scrollToMatch, setCollapsedCategories],
+    [selectedId, scrollToMatch, setCollapsedCategories, focusReplacePanelInput],
   );
 
   // 跨笔记查找：按 scope 加载所有笔记并搜索
@@ -1089,8 +1146,8 @@ export function MainWindow({
   );
 
   const handleReplaceFindExecute = useCallback(
-    async (direction: "next" | "prev") => {
-      const query = replaceQuery;
+    async (direction: "next" | "prev", queryOverride?: string) => {
+      const query = queryOverride ?? replaceQuery;
       if (!query) {
         setReplaceMatches([]);
         setReplaceCurrentIndex(-1);
@@ -1135,7 +1192,14 @@ export function MainWindow({
           if (idx === -1) idx = crossMatches.length - 1;
         }
         setReplaceCurrentIndex(idx);
+        const cm = crossMatches[idx];
+        const noteContent =
+          cm.noteId === selectedId
+            ? content
+            : (replaceCrossNoteContentsRef.current.get(cm.noteId)?.content ?? "");
+        syncReplaceMatchesForNote(noteContent, query);
         navigateToMatchAt(idx, [], crossMatches);
+        if (replaceOpenRef.current) focusReplacePanelInput();
         return;
       }
 
@@ -1179,8 +1243,11 @@ export function MainWindow({
 
       if (textarea) {
         const match = newMatches[idx];
-        textarea.setSelectionRange(match.start, match.end);
+        if (!replaceOpenRef.current) {
+          textarea.setSelectionRange(match.start, match.end);
+        }
         scrollToMatch(textarea, match.start);
+        if (replaceOpenRef.current) focusReplacePanelInput();
       }
     },
     [
@@ -1194,6 +1261,8 @@ export function MainWindow({
       selectedId,
       navigateToMatchAt,
       runCrossNoteSearch,
+      syncReplaceMatchesForNote,
+      focusReplacePanelInput,
     ],
   );
 
@@ -1264,40 +1333,86 @@ export function MainWindow({
     setReplaceSearched(false);
     setReplaceFindCount(null);
     setReplaceAllCount(null);
+    setReplaceBatchConfirm(null);
     if (highlightRef.current) highlightRef.current.innerHTML = "";
     contentRef.current?.focus();
   }, []);
 
   const handleReplaceCurrent = useCallback(() => {
+    const textarea = contentRef.current;
+    if (!textarea || !replaceQuery || !replaceSearched) return;
+
+    const applyReplaceWithUndo = (
+      start: number,
+      end: number,
+      replacement: string,
+      newContent: string,
+    ) => {
+      replaceApplyingRef.current = true;
+      applyTextareaRangeReplace(textarea, start, end, replacement, true);
+      replaceApplyingRef.current = false;
+      setContent(newContent);
+      markDirty();
+    };
+
+    const advanceAfterReplace = (
+      newLocalMatches: Range[],
+      updatedCross: CrossNoteMatch[],
+      prevIndex: number,
+    ) => {
+      setReplaceMatches(newLocalMatches);
+      setReplaceCrossMatches(updatedCross);
+      setReplaceSearched(true);
+      setReplaceFindCount(updatedCross.length > 0 ? updatedCross.length : newLocalMatches.length);
+      setReplaceAllCount(null);
+
+      const activeList = updatedCross.length > 0 ? updatedCross : newLocalMatches;
+      if (activeList.length === 0) {
+        setReplaceCurrentIndex(-1);
+        focusReplacePanelInput();
+        return;
+      }
+
+      const nextIdx = prevIndex % activeList.length;
+      setReplaceCurrentIndex(nextIdx);
+      if (updatedCross.length > 0) {
+        replaceNavInProgressRef.current = true;
+        navigateToMatchAt(nextIdx, [], updatedCross);
+      } else {
+        scrollToMatch(textarea, newLocalMatches[nextIdx].start);
+        focusReplacePanelInput();
+      }
+    };
+
+    const findOpts = [replaceCaseSensitive, replaceUseRegex, replaceWholeWord] as const;
+
     // 跨笔记模式：需要在当前笔记中执行替换（导航后已是目标笔记）
     if (replaceCrossMatches.length > 0) {
-      // 先检查当前笔记内是否有匹配
       const cm = replaceCrossMatches[replaceCurrentIndex];
       if (!cm || cm.noteId !== selectedId || replaceCurrentIndex < 0) return;
-      const { content: newContent } = replaceCurrent(
+      const localMatches = findAll(content, replaceQuery, ...findOpts);
+      const localIdx = localMatches.findIndex((m) => m.start === cm.start && m.end === cm.end);
+      if (localIdx < 0) return;
+
+      const { start, end } = localMatches[localIdx];
+      const { content: newContent, offsetDiff } = replaceCurrent(
         content,
         replaceQuery,
         replaceValue,
-        replaceCurrentIndex,
+        localIdx,
         replaceCaseSensitive,
         replaceUseRegex,
         replaceWholeWord,
         replacePreserveCase,
       );
-      setContent(newContent);
-      markDirty();
-      // 更新 crossMatches 中当前笔记的所有匹配偏移（内容改变后需要重新查找）
+      const replacement = newContent.slice(start, start + (end - start) + offsetDiff);
+      applyReplaceWithUndo(start, end, replacement, newContent);
+
       const noteMap = replaceCrossNoteContentsRef.current;
       const noteData = noteMap.get(selectedId);
       if (noteData) noteData.content = newContent;
-      // 重新查找当前笔记的匹配
-      const newMatches = findAll(
-        newContent,
-        replaceQuery,
-        replaceCaseSensitive,
-        replaceUseRegex,
-        replaceWholeWord,
-      );
+
+      const newMatches = findAll(newContent, replaceQuery, ...findOpts);
       const updatedCross = replaceCrossMatches.filter((m) => m.noteId !== selectedId);
       for (const m of newMatches) {
         updatedCross.push({ ...m, noteId: selectedId, noteTitle: cm.noteTitle });
@@ -1306,28 +1421,16 @@ export function MainWindow({
         if (a.noteId !== b.noteId) return a.noteId.localeCompare(b.noteId);
         return a.start - b.start;
       });
-      setReplaceCrossMatches(updatedCross);
-      setReplaceMatches(newMatches);
-      setReplaceSearched(true);
-      setReplaceFindCount(null);
-      setReplaceAllCount(null);
-      if (newMatches.length > 0) {
-        const idx = Math.min(replaceCurrentIndex, newMatches.length - 1);
-        setReplaceCurrentIndex(idx);
-        const ta = contentRef.current;
-        if (ta) {
-          const match = newMatches[idx];
-          ta.setSelectionRange(match.start, match.end);
-          scrollToMatch(ta, match.start);
-        }
-      } else {
-        setReplaceCurrentIndex(-1);
-      }
+
+      advanceAfterReplace(newMatches, updatedCross, replaceCurrentIndex);
       return;
     }
 
-    if (!replaceQuery || replaceCurrentIndex < 0 || replaceMatches.length === 0) return;
-    const { content: newContent } = replaceCurrent(
+    const localMatches = findAll(content, replaceQuery, ...findOpts);
+    if (replaceCurrentIndex < 0 || replaceCurrentIndex >= localMatches.length) return;
+
+    const { start, end } = localMatches[replaceCurrentIndex];
+    const { content: newContent, offsetDiff } = replaceCurrent(
       content,
       replaceQuery,
       replaceValue,
@@ -1337,97 +1440,149 @@ export function MainWindow({
       replaceWholeWord,
       replacePreserveCase,
     );
-    setContent(newContent);
-    markDirty();
-    const newMatches = findAll(
-      newContent,
-      replaceQuery,
-      replaceCaseSensitive,
-      replaceUseRegex,
-      replaceWholeWord,
-    );
-    setReplaceMatches(newMatches);
-    setReplaceSearched(true);
-    setReplaceFindCount(null);
-    setReplaceAllCount(null);
-    if (newMatches.length > 0) {
-      const idx = Math.min(replaceCurrentIndex, newMatches.length - 1);
-      setReplaceCurrentIndex(idx);
-      const textarea = contentRef.current;
-      if (textarea) {
-        textarea.focus();
-        const match = newMatches[idx];
-        textarea.setSelectionRange(match.start, match.end);
-        scrollToMatch(textarea, match.start);
-      }
-    } else {
-      setReplaceCurrentIndex(-1);
-    }
+    const replacement = newContent.slice(start, start + (end - start) + offsetDiff);
+    applyReplaceWithUndo(start, end, replacement, newContent);
+
+    const newMatches = findAll(newContent, replaceQuery, ...findOpts);
+    advanceAfterReplace(newMatches, [], replaceCurrentIndex);
   }, [
     content,
     replaceQuery,
     replaceCurrentIndex,
-    replaceMatches.length,
+    replaceMatches,
     replaceValue,
     replaceCaseSensitive,
     replaceUseRegex,
     replaceWholeWord,
     replacePreserveCase,
     replaceCrossMatches,
+    replaceSearched,
     selectedId,
     scrollToMatch,
+    navigateToMatchAt,
+    focusReplacePanelInput,
+  ]);
+
+  const isReplaceCurrentDisabled =
+    !replaceQuery ||
+    !replaceSearched ||
+    replaceCurrentIndex < 0 ||
+    (replaceCrossMatches.length > 0
+      ? (() => {
+          const cm = replaceCrossMatches[replaceCurrentIndex];
+          if (!cm || cm.noteId !== selectedId) return true;
+          const localMatches = findAll(
+            content,
+            replaceQuery,
+            replaceCaseSensitive,
+            replaceUseRegex,
+            replaceWholeWord,
+          );
+          return !localMatches.some((m) => m.start === cm.start && m.end === cm.end);
+        })()
+      : replaceCurrentIndex >=
+        findAll(content, replaceQuery, replaceCaseSensitive, replaceUseRegex, replaceWholeWord)
+          .length);
+
+  const executeCrossNoteReplaceBatch = useCallback(async () => {
+    if (!replaceQuery) return;
+
+    const noteMetas = await listNotes();
+    const cat = selectedNote?.category ?? "";
+    const filtered =
+      replaceScope === "all" ? noteMetas : noteMetas.filter((n) => n.category === cat);
+
+    let totalReplaced = 0;
+    let currentNoteContent: string | null = null;
+
+    for (const meta of filtered) {
+      try {
+        const note = await getNote(meta.id);
+        const { content: newContent, replacedCount } = replaceAll(
+          note.content,
+          replaceQuery,
+          replaceValue,
+          replaceCaseSensitive,
+          replaceUseRegex,
+          replaceWholeWord,
+          replacePreserveCase,
+        );
+        if (replacedCount > 0) {
+          await updateNote(meta.id, {
+            title: note.title,
+            content: newContent,
+            category: note.category,
+          });
+          totalReplaced += replacedCount;
+          if (meta.id === selectedId) {
+            currentNoteContent = newContent;
+          }
+          const noteMap = replaceCrossNoteContentsRef.current;
+          const cached = noteMap.get(meta.id);
+          if (cached) cached.content = newContent;
+        }
+      } catch {
+        // skip notes that fail
+      }
+    }
+
+    if (totalReplaced > 0) {
+      await emit("notes-changed");
+    }
+
+    if (currentNoteContent !== null) {
+      const ta = contentRef.current;
+      if (ta) {
+        ta.value = currentNoteContent;
+      }
+      setContent(currentNoteContent);
+      setSaveState("saved");
+    }
+
+    setReplaceMatches([]);
+    setReplaceCrossMatches([]);
+    setReplaceCurrentIndex(-1);
+    setReplaceSearched(false);
+    setReplaceFindCount(null);
+    setReplaceAllCount(totalReplaced);
+    setReplaceBatchConfirm(null);
+  }, [
+    replaceQuery,
+    replaceValue,
+    replaceCaseSensitive,
+    replaceUseRegex,
+    replaceWholeWord,
+    replacePreserveCase,
+    replaceScope,
+    selectedNote?.category,
+    selectedId,
   ]);
 
   const handleReplaceAll = useCallback(() => {
     if (!replaceQuery) return;
 
-    // "所有笔记"模式弹窗确认
-    if (replaceScope === "all") {
-      const confirmed = window.confirm(
-        t("main.replace.confirmAll", {
-          count: notes.length,
-          defaultValue: "确定要在所有笔记中执行替换？（共 {{count}} 篇，此操作不可撤销）",
-        }),
-      );
-      if (!confirmed) return;
-      // 异步遍历所有笔记执行替换
+    if (replaceScope === "category" || replaceScope === "all") {
+      const cat = selectedNote?.category ?? "";
+      const categoryName = cat || t("main.category.uncategorized", { defaultValue: "未分类" });
+      const noteCount =
+        replaceScope === "all" ? notes.length : notes.filter((n) => n.category === cat).length;
       void (async () => {
-        let totalReplaced = 0;
-        const noteMetas = await listNotes();
-        for (const meta of noteMetas) {
-          try {
-            const note = await getNote(meta.id);
-            const { content: newContent, replacedCount } = replaceAll(
-              note.content,
-              replaceQuery,
-              replaceValue,
-              replaceCaseSensitive,
-              replaceUseRegex,
-              replaceWholeWord,
-              replacePreserveCase,
-            );
-            if (replacedCount > 0) {
-              await updateNote(meta.id, {
-                title: note.title,
-                content: newContent,
-                category: note.category,
-              });
-              totalReplaced += replacedCount;
-            }
-          } catch {
-            // skip notes that fail
-          }
-        }
-        if (totalReplaced > 0) {
-          await emit("notes-changed");
-        }
-        setReplaceAllCount(totalReplaced);
+        const crossMatches = await runCrossNoteSearch(replaceQuery);
+        const affectedNoteCount = new Set(crossMatches.map((m) => m.noteId)).size;
+        if (affectedNoteCount === 0) return;
+        setReplaceBatchConfirm({
+          scope: replaceScope,
+          noteCount,
+          affectedNoteCount,
+          matchCount: crossMatches.length,
+          categoryName,
+        });
       })();
       return;
     }
 
-    // 保存快照用于 Ctrl+Z 撤销
-    replaceAllPrevContentRef.current = content;
+    const textarea = contentRef.current;
+    if (!textarea) return;
 
     const { content: newContent, replacedCount } = replaceAll(
       content,
@@ -1439,9 +1594,14 @@ export function MainWindow({
       replacePreserveCase,
     );
     if (replacedCount === 0) return;
-    setContent(newContent);
+
+    replaceApplyingRef.current = true;
+    const applied = applyTextareaFullContent(textarea, newContent);
+    replaceApplyingRef.current = false;
+    setContent(applied);
     markDirty();
     setReplaceMatches([]);
+    setReplaceCrossMatches([]);
     setReplaceCurrentIndex(-1);
     setReplaceSearched(false);
     setReplaceFindCount(null);
@@ -1455,7 +1615,9 @@ export function MainWindow({
     replaceWholeWord,
     replacePreserveCase,
     replaceScope,
-    notes.length,
+    notes,
+    selectedNote?.category,
+    runCrossNoteSearch,
     t,
   ]);
 
@@ -1467,19 +1629,29 @@ export function MainWindow({
     if (isFindActive) {
       highlightRef.current.innerHTML = buildHighlightHTML(content, findMatches, findCurrentIndex);
     } else if (isReplaceActive) {
-      // 跨笔记模式：计算当前笔记内的高亮索引
+      const localMatches = findAll(
+        content,
+        replaceQuery,
+        replaceCaseSensitive,
+        replaceUseRegex,
+        replaceWholeWord,
+      );
       let effectiveIdx = replaceCurrentIndex;
-      if (replaceCrossMatches.length > 0 && replaceCurrentIndex >= 0) {
-        const cm = replaceCrossMatches[replaceCurrentIndex];
-        if (cm) {
-          const localIdx = replaceMatches.findIndex(
-            (m) => m.start === cm.start && m.end === cm.end,
-          );
-          if (localIdx !== -1) effectiveIdx = localIdx;
-          else effectiveIdx = -1; // 当前笔记无此匹配，不显示橙色高亮
+      if (replaceCrossMatches.length > 0) {
+        effectiveIdx = -1;
+        if (replaceCurrentIndex >= 0) {
+          const cm = replaceCrossMatches[replaceCurrentIndex];
+          if (cm && cm.noteId === selectedId) {
+            const localIdx = localMatches.findIndex(
+              (m) => m.start === cm.start && m.end === cm.end,
+            );
+            if (localIdx !== -1) effectiveIdx = localIdx;
+          }
         }
+      } else if (effectiveIdx >= localMatches.length) {
+        effectiveIdx = localMatches.length > 0 ? 0 : -1;
       }
-      highlightRef.current.innerHTML = buildHighlightHTML(content, replaceMatches, effectiveIdx);
+      highlightRef.current.innerHTML = buildHighlightHTML(content, localMatches, effectiveIdx);
     } else {
       highlightRef.current.innerHTML = "";
     }
@@ -1493,7 +1665,10 @@ export function MainWindow({
     findCurrentIndex,
     replaceOpen,
     replaceSearched,
-    replaceMatches,
+    replaceQuery,
+    replaceCaseSensitive,
+    replaceUseRegex,
+    replaceWholeWord,
     replaceCurrentIndex,
     replaceCrossMatches,
     content,
@@ -1634,12 +1809,25 @@ export function MainWindow({
     runCrossNoteSearch,
   ]);
 
-  // 选项范围变更时自动重新搜索
+  // 选项 / 范围变更时自动重新搜索
   useEffect(() => {
     if (!replaceSearched || !replaceOpen || !replaceQuery) return;
     handleReplaceFindExecute("next");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [replaceScope]);
+  }, [replaceScope, replaceCaseSensitive, replaceUseRegex, replaceWholeWord]);
+
+  // 批量替换确认面板：Esc 关闭
+  useEffect(() => {
+    if (!replaceBatchConfirm) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setReplaceBatchConfirm(null);
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [replaceBatchConfirm]);
 
   // 切换到 preview 模式时关闭所有面板
   useEffect(() => {
@@ -1654,6 +1842,7 @@ export function MainWindow({
         setReplaceSearched(false);
         if (highlightRef.current) highlightRef.current.innerHTML = "";
       }
+      setReplaceBatchConfirm(null);
     }
   }, [viewMode, findOpen, replaceOpen]);
 
@@ -1675,6 +1864,7 @@ export function MainWindow({
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.ctrlKey || event.metaKey) && (event.key === "f" || event.key === "F")) {
+        if (shouldSkipEditorShortcut(event)) return;
         event.preventDefault();
         if (!selectedId) return;
         if (viewMode === "preview") return;
@@ -1748,38 +1938,20 @@ export function MainWindow({
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.ctrlKey || event.metaKey) && (event.key === "h" || event.key === "H")) {
+        if (shouldSkipEditorShortcut(event)) return;
         event.preventDefault();
         if (!selectedId) return;
         if (viewMode === "preview") return;
+        const textarea = contentRef.current;
+        const selected =
+          textarea && textarea.selectionStart !== textarea.selectionEnd
+            ? content.substring(textarea.selectionStart, textarea.selectionEnd)
+            : "";
         if (replaceOpen) {
-          // 有框选文本时更新查找
-          const textarea = contentRef.current;
-          if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
-            const selected = content.substring(textarea.selectionStart, textarea.selectionEnd);
-            if (selected) {
-              setReplaceQuery(selected);
-              const newMatches = findAll(
-                content,
-                selected,
-                replaceCaseSensitive,
-                replaceUseRegex,
-                replaceWholeWord,
-              );
-              setReplaceMatches(newMatches);
-              setReplaceSearched(true);
-              if (newMatches.length > 0) {
-                const cursorPos = textarea.selectionStart;
-                let idx = newMatches.findIndex((m) => m.start >= cursorPos);
-                if (idx === -1) idx = 0;
-                setReplaceCurrentIndex(idx);
-                const match = newMatches[idx];
-                textarea.setSelectionRange(match.start, match.end);
-                scrollToMatch(textarea, match.start);
-              } else {
-                setReplaceCurrentIndex(-1);
-              }
-              return;
-            }
+          if (selected) {
+            setReplaceQuery(selected);
+            void handleReplaceFindExecute("next", selected);
+            return;
           }
           replaceFindInputRef.current?.focus();
           replaceFindInputRef.current?.select();
@@ -1787,37 +1959,11 @@ export function MainWindow({
           setGotoLineOpen(false);
           setFindOpen(false);
           setReplaceOpen(true);
-          // 有框选文本时自动填入查找框并搜索
-          const textarea = contentRef.current;
-          if (textarea && textarea.selectionStart !== textarea.selectionEnd) {
-            const selected = content.substring(textarea.selectionStart, textarea.selectionEnd);
-            if (selected) {
-              setReplaceQuery(selected);
-              // 自动搜索
-              const newMatches = findAll(
-                content,
-                selected,
-                replaceCaseSensitive,
-                replaceUseRegex,
-                replaceWholeWord,
-              );
-              setReplaceMatches(newMatches);
-              setReplaceSearched(true);
-              if (newMatches.length > 0) {
-                const cursorPos = textarea.selectionStart;
-                let idx = newMatches.findIndex((m) => m.start >= cursorPos);
-                if (idx === -1) idx = 0;
-                setReplaceCurrentIndex(idx);
-                const match = newMatches[idx];
-                requestAnimationFrame(() => {
-                  textarea.focus();
-                  textarea.setSelectionRange(match.start, match.end);
-                  scrollToMatch(textarea, match.start);
-                });
-              } else {
-                setReplaceCurrentIndex(-1);
-              }
-            }
+          if (selected) {
+            setReplaceQuery(selected);
+            requestAnimationFrame(() => {
+              void handleReplaceFindExecute("next", selected);
+            });
           }
         }
       }
@@ -1825,16 +1971,7 @@ export function MainWindow({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [
-    selectedId,
-    viewMode,
-    replaceOpen,
-    content,
-    replaceCaseSensitive,
-    replaceUseRegex,
-    replaceWholeWord,
-    scrollToMatch,
-  ]);
+  }, [selectedId, viewMode, replaceOpen, content, handleReplaceFindExecute]);
 
   useEffect(() => {
     if (!selectedId || saveState !== "dirty") return undefined;
@@ -2515,6 +2652,7 @@ export function MainWindow({
                   </svg>
                   <input
                     type="text"
+                    data-editor-shortcut-skip
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                     placeholder={t("main.sidebar.searchPlaceholder", { defaultValue: "搜索笔记…" })}
@@ -3185,36 +3323,10 @@ export function MainWindow({
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
                         event.preventDefault();
-                        // 不触发查找，仅导航 — 查找需要通过按钮触发
-                        if (replaceSearched) {
-                          if (event.shiftKey) {
-                            const total = replaceMatches.length;
-                            if (total === 0) return;
-                            const idx =
-                              ((replaceCurrentIndex >= 0 ? replaceCurrentIndex : 0) - 1 + total) %
-                              total;
-                            setReplaceCurrentIndex(idx);
-                            const textarea = contentRef.current;
-                            if (textarea) {
-                              const match = replaceMatches[idx];
-                              textarea.focus();
-                              textarea.setSelectionRange(match.start, match.end);
-                              scrollToMatch(textarea, match.start);
-                            }
-                          } else {
-                            const total = replaceMatches.length;
-                            if (total === 0) return;
-                            const idx =
-                              ((replaceCurrentIndex >= 0 ? replaceCurrentIndex : -1) + 1) % total;
-                            setReplaceCurrentIndex(idx);
-                            const textarea = contentRef.current;
-                            if (textarea) {
-                              const match = replaceMatches[idx];
-                              textarea.focus();
-                              textarea.setSelectionRange(match.start, match.end);
-                              scrollToMatch(textarea, match.start);
-                            }
-                          }
+                        if (event.shiftKey) {
+                          handleReplaceFindPrev();
+                        } else {
+                          handleReplaceFindNext();
                         }
                       } else if (event.key === "Escape") {
                         event.preventDefault();
@@ -3236,6 +3348,7 @@ export function MainWindow({
                   </span>
                   <button
                     type="button"
+                    onMouseDown={(event) => event.preventDefault()}
                     onClick={handleReplaceFindPrev}
                     disabled={
                       (replaceCrossMatches.length === 0 && replaceMatches.length === 0) ||
@@ -3258,6 +3371,7 @@ export function MainWindow({
                   </button>
                   <button
                     type="button"
+                    onMouseDown={(event) => event.preventDefault()}
                     onClick={handleReplaceFindNext}
                     disabled={
                       (replaceCrossMatches.length === 0 && replaceMatches.length === 0) ||
@@ -3324,6 +3438,7 @@ export function MainWindow({
                   <div className="flex items-center gap-1 shrink-0">
                     <button
                       type="button"
+                      onMouseDown={(event) => event.preventDefault()}
                       onClick={() => handleReplaceFindExecute("next")}
                       disabled={!replaceQuery}
                       className="px-2 h-6 text-[11px] font-mono rounded-md border border-paper-deep/30 text-ink-ghost hover:text-ink-soft hover:border-ink-ghost/30 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default"
@@ -3332,11 +3447,9 @@ export function MainWindow({
                     </button>
                     <button
                       type="button"
+                      onMouseDown={(event) => event.preventDefault()}
                       onClick={handleReplaceCurrent}
-                      disabled={
-                        !replaceQuery ||
-                        (replaceMatches.length === 0 && replaceCrossMatches.length === 0)
-                      }
+                      disabled={isReplaceCurrentDisabled}
                       className="px-2 h-6 text-[11px] font-mono rounded-md border border-paper-deep/30 text-ink-ghost hover:text-ink-soft hover:border-ink-ghost/30 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default"
                     >
                       {t("main.replace.btn", { defaultValue: "替换" })}
@@ -3433,6 +3546,49 @@ export function MainWindow({
                           : ""}
                     </span>
                   </div>
+                </div>
+              </div>
+            )}
+            {replaceBatchConfirm && (
+              <div className="absolute top-12 right-4 z-50 flex flex-col gap-2 py-3 px-4 rounded-lg bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 shadow-lg animate-menu-enter min-w-[380px] max-w-[420px]">
+                <p className="text-[12px] font-body text-ink-soft leading-relaxed">
+                  {replaceBatchConfirm.scope === "category"
+                    ? t("main.replace.batchConfirm.category", {
+                        defaultValue:
+                          "即将修改 {{fileCount}} 份文件，共计 {{matchCount}} 个匹配项（「{{category}}」分类）。此操作无法通过 Ctrl+Z 撤回。",
+                        category: replaceBatchConfirm.categoryName,
+                        fileCount: replaceBatchConfirm.affectedNoteCount,
+                        matchCount: replaceBatchConfirm.matchCount,
+                      })
+                    : t("main.replace.batchConfirm.all", {
+                        defaultValue:
+                          "即将修改 {{fileCount}} 份文件，共计 {{matchCount}} 个匹配项。此操作无法通过 Ctrl+Z 撤回。",
+                        fileCount: replaceBatchConfirm.affectedNoteCount,
+                        matchCount: replaceBatchConfirm.matchCount,
+                      })}
+                </p>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setReplaceBatchConfirm(null)}
+                    className="px-3 h-7 text-[11px] font-mono rounded-md border border-paper-deep/30 text-ink-ghost hover:text-ink-soft hover:border-ink-ghost/30 transition-colors cursor-pointer"
+                  >
+                    {t("common.cancel", { defaultValue: "取消" })}
+                  </button>
+                  <button
+                    type="button"
+                    autoFocus
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void executeCrossNoteReplaceBatch();
+                      }
+                    }}
+                    onClick={() => void executeCrossNoteReplaceBatch()}
+                    className="px-3 h-7 text-[11px] font-mono rounded-md border border-bamboo/30 bg-bamboo/15 text-bamboo hover:bg-bamboo/25 transition-colors cursor-pointer"
+                  >
+                    {t("main.replace.batchConfirm.confirm", { defaultValue: "确认" })}
+                  </button>
                 </div>
               </div>
             )}
@@ -3621,6 +3777,7 @@ export function MainWindow({
             >
               <input
                 type="text"
+                data-editor-shortcut-skip
                 value={title}
                 onChange={(event) => {
                   setTitle(event.target.value);
@@ -3738,6 +3895,7 @@ export function MainWindow({
                             onChange={(event) => {
                               setContent(event.target.value);
                               markDirty();
+                              if (replaceApplyingRef.current) return;
                               if (findOpen) {
                                 setFindOpen(false);
                                 setFindSearched(false);

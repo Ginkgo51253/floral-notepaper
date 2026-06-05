@@ -90,7 +90,11 @@
       "replaceAll": "全部替換",
       "matchCount": "匹配{{count}}處",
       "replacedCount": "成功替換{{count}}處",
-      "confirmAll": "確定要在所有筆記中執行替換？\n（共 {{count}} 篇，此操作不可撤銷）",
+      "batchConfirm": {
+        "category": "即將修改 {{fileCount}} 份檔案，共計 {{matchCount}} 個匹配項（「{{category}}」分類）。此操作無法透過 Ctrl+Z 撤回。",
+        "all": "即將修改 {{fileCount}} 份檔案，共計 {{matchCount}} 個匹配項。此操作無法透過 Ctrl+Z 撤回。",
+        "confirm": "確認"
+      },
       "options": {
         "label": "選項",
         "caseSensitive": "Aa",

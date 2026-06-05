@@ -90,7 +90,11 @@
       "replaceAll": "Replace All",
       "matchCount": "{{count}} matches",
       "replacedCount": "Replaced {{count}}",
-      "confirmAll": "Replace in all notes?\n({{count}} notes, cannot be undone)",
+      "batchConfirm": {
+        "category": "About to modify {{fileCount}} files with {{matchCount}} matches in \"{{category}}\". This cannot be undone with Ctrl+Z.",
+        "all": "About to modify {{fileCount}} files with {{matchCount}} matches. This cannot be undone with Ctrl+Z.",
+        "confirm": "Confirm"
+      },
       "options": {
         "label": "Options",
         "caseSensitive": "Aa",
