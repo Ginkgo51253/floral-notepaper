@@ -88,6 +88,7 @@
       "label": "Replace with",
       "btn": "Replace",
       "replaceAll": "Replace All",
+      "matchCount": "{{count}} matches",
       "replacedCount": "Replaced {{count}}",
       "confirmAll": "Replace in all notes?\n({{count}} notes, cannot be undone)",
       "options": {
@@ -99,6 +100,7 @@
       },
       "scope": {
         "current": "Current Note",
+        "category": "Current Category",
         "all": "All Notes"
       }
     },

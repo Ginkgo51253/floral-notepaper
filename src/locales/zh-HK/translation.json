@@ -88,6 +88,7 @@
       "label": "替換為",
       "btn": "替換",
       "replaceAll": "全部替換",
+      "matchCount": "匹配{{count}}處",
       "replacedCount": "成功替換{{count}}處",
       "confirmAll": "確定要在所有筆記中執行替換？\n（共 {{count}} 篇，此操作不可撤銷）",
       "options": {
@@ -99,6 +100,7 @@
       },
       "scope": {
         "current": "目前筆記",
+        "category": "目前分類",
         "all": "所有筆記"
       }
     },
